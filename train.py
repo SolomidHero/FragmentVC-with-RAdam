@@ -8,6 +8,7 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
+from torch_optimizer import RAdam
 from torch.optim import AdamW
 from torch.utils.data import DataLoader, random_split
 from torch.utils.tensorboard import SummaryWriter
@@ -22,12 +23,12 @@ def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("data_dir", type=str)
     parser.add_argument("--save_dir", type=str, default=".")
-    parser.add_argument("--total_steps", type=int, default=250000)
+    parser.add_argument("--total_steps", type=int, default=60000)
     parser.add_argument("--warmup_steps", type=int, default=500)
     parser.add_argument("--valid_steps", type=int, default=1000)
     parser.add_argument("--log_steps", type=int, default=100)
-    parser.add_argument("--save_steps", type=int, default=10000)
-    parser.add_argument("--milestones", type=int, nargs=2, default=[50000, 150000])
+    parser.add_argument("--save_steps", type=int, default=5000)
+    parser.add_argument("--milestones", type=int, nargs=2, default=[15000, 30000])
     parser.add_argument("--exclusive_rate", type=float, default=1.0)
     parser.add_argument("--n_samples", type=int, default=10)
     parser.add_argument("--accu_steps", type=int, default=2)
@@ -35,6 +36,7 @@ def parse_args():
     parser.add_argument("--n_workers", type=int, default=8)
     parser.add_argument("--preload", action="store_true")
     parser.add_argument("--comment", type=str)
+    parser.add_argument("--ckpt", type=str, default=None)
     return vars(parser.parse_args())
 
 
@@ -105,6 +107,7 @@ def main(
     n_workers,
     preload,
     comment,
+    ckpt,
 ):
     """Main function."""
 
@@ -113,7 +116,8 @@ def main(
     metadata_path = Path(data_dir) / "metadata.json"
 
     dataset = IntraSpeakerDataset(data_dir, metadata_path, n_samples, preload)
-    lengths = [trainlen := int(0.9 * len(dataset)), len(dataset) - trainlen]
+    trainlen = int(0.9 * len(dataset))
+    lengths = [trainlen, len(dataset) - trainlen]
     trainset, validset = random_split(dataset, lengths)
     train_loader = DataLoader(
         trainset,
@@ -143,22 +147,42 @@ def main(
     save_dir_path = Path(save_dir)
     save_dir_path.mkdir(parents=True, exist_ok=True)
 
-    model = FragmentVC().to(device)
-    model = torch.jit.script(model)
+    if ckpt is not None:
+        ref_included = True
+        start_step = int(ckpt.split('-')[1][4:])
+
+        model = torch.jit.load(ckpt).to(device)
+        optimizer = RAdam([
+            {"params": model.unet.parameters(), "lr": 1e-6},
+            {"params": model.smoothers.parameters()},
+            {"params": model.mel_linear.parameters()},
+            {"params": model.post_net.parameters()},
+        ], lr=1e-4,
+        )
+        scheduler = get_cosine_schedule_with_warmup(
+            optimizer, warmup_steps, total_steps - start_step
+        )
+        print("Optimizer and scheduler restarted.")
+        print(f"Model loaded from {ckpt}, iteration: {start_step}")
+    else:
+        ref_included = False
+        start_step = 0
+
+        model = FragmentVC().to(device)
+        model = torch.jit.script(model)
+        optimizer = AdamW(model.parameters(), lr=1e-4)
+        scheduler = get_cosine_schedule_with_warmup(optimizer, warmup_steps, total_steps)
 
     criterion = nn.L1Loss()
-    optimizer = AdamW(model.parameters(), lr=1e-4)
-    scheduler = get_cosine_schedule_with_warmup(optimizer, warmup_steps, total_steps)
 
     best_loss = float("inf")
     best_state_dict = None
 
     self_exclude = 0.0
-    ref_included = False
 
     pbar = tqdm(total=valid_steps, ncols=0, desc="Train", unit=" step")
 
-    for step in range(total_steps):
+    for step in range(start_step, total_steps):
         batch_loss = 0.0
 
         for _ in range(accu_steps):

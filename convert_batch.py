@@ -27,11 +27,11 @@ def parse_args():
 
     parser.add_argument("--sample_rate", type=int, default=16000)
     parser.add_argument("--preemph", type=float, default=0.97)
-    parser.add_argument("--hop_len", type=int, default=326)
-    parser.add_argument("--win_len", type=int, default=1304)
-    parser.add_argument("--n_fft", type=int, default=1304)
+    parser.add_argument("--hop_len", type=int, default=320)
+    parser.add_argument("--win_len", type=int, default=1280)
+    parser.add_argument("--n_fft", type=int, default=1280)
     parser.add_argument("--n_mels", type=int, default=80)
-    parser.add_argument("--f_min", type=int, default=80)
+    parser.add_argument("--f_min", type=int, default=50)
     parser.add_argument("--audio_config", action=ActionConfigFile)
 
     return vars(parser.parse_args())
