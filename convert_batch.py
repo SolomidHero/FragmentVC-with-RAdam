@@ -31,7 +31,8 @@ def parse_args():
     parser.add_argument("--win_len", type=int, default=1280)
     parser.add_argument("--n_fft", type=int, default=1280)
     parser.add_argument("--n_mels", type=int, default=80)
-    parser.add_argument("--f_min", type=int, default=50)
+    parser.add_argument("--f_min", type=int, default=80)
+    parser.add_argument("--f_max", type=int, default=None)
     parser.add_argument("--audio_config", action=ActionConfigFile)
 
     return vars(parser.parse_args())
@@ -50,6 +51,7 @@ def main(
     n_fft,
     n_mels,
     f_min,
+    f_max,
     **kwargs,
 ):
     """Main function."""
@@ -75,6 +77,7 @@ def main(
         hop_length=hop_len,
         win_length=win_len,
         f_min=f_min,
+        f_max=f_max,
     )
 
     with open(info_path) as f:

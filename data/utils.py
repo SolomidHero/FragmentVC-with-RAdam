@@ -42,13 +42,14 @@ def log_mel_spectrogram(
     hop_length: int,
     win_length: int,
     f_min: int,
+    f_max: int
 ) -> np.ndarray:
     """Create a log Mel spectrogram from a raw audio signal."""
     x = lfilter([1, -preemph], [1], x)
     magnitude = np.abs(
         librosa.stft(x, n_fft=n_fft, hop_length=hop_length, win_length=win_length)
     )
-    mel_fb = librosa.filters.mel(sample_rate, n_fft, n_mels=n_mels, fmin=f_min)
+    mel_fb = librosa.filters.mel(sample_rate, n_fft, n_mels=n_mels, fmin=f_min, f_max=f_max)
     mel_spec = np.dot(mel_fb, magnitude)
     log_mel_spec = np.log(mel_spec + 1e-9)
     return log_mel_spec.T

@@ -33,7 +33,8 @@ def parse_args():
     parser.add_argument("--win_len", type=int, default=1280)
     parser.add_argument("--n_fft", type=int, default=1280)
     parser.add_argument("--n_mels", type=int, default=80)
-    parser.add_argument("--f_min", type=int, default=50)
+    parser.add_argument("--f_min", type=int, default=80)
+    parser.add_argument("--f_max", type=int, default=None)
     parser.add_argument("--audio_config", action=ActionConfigFile)
 
     return vars(parser.parse_args())
@@ -53,6 +54,7 @@ def main(
     n_fft,
     n_mels,
     f_min,
+    f_max,
     **kwargs,
 ):
     """Main function."""
@@ -89,7 +91,7 @@ def main(
         tgt_wav = tfm.build_array(input_array=tgt_wav, sample_rate_in=sample_rate)
         tgt_wav = deepcopy(tgt_wav)
         tgt_mel = log_mel_spectrogram(
-            tgt_wav, preemph, sample_rate, n_mels, n_fft, hop_len, win_len, f_min
+            tgt_wav, preemph, sample_rate, n_mels, n_fft, hop_len, win_len, f_min, f_max
         )
         tgt_mels.append(tgt_mel)
 

@@ -1,0 +1,13 @@
+save_dir: "."
+total_steps: 60000
+warmup_steps: 500
+valid_steps: 1000
+log_steps: 100
+save_steps: 5000
+milestones: [15000, 30000]
+exclusive_rate: 1.0
+n_samples: 10
+accu_steps: 2
+batch_size: 8
+n_workers: 8
+comment: null

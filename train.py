@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Train FragmentVC model."""
 
-import argparse
+# import argparse
 import datetime
 import random
 from pathlib import Path
@@ -13,6 +13,7 @@ from torch.optim import AdamW
 from torch.utils.data import DataLoader, random_split
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
+from jsonargparse import ArgumentParser, ActionConfigFile
 
 from data import IntraSpeakerDataset, collate_batch
 from models import FragmentVC, get_cosine_schedule_with_warmup
@@ -20,7 +21,7 @@ from models import FragmentVC, get_cosine_schedule_with_warmup
 
 def parse_args():
     """Parse command-line arguments."""
-    parser = argparse.ArgumentParser()
+    parser = ArgumentParser()
     parser.add_argument("data_dir", type=str)
     parser.add_argument("--save_dir", type=str, default=".")
     parser.add_argument("--total_steps", type=int, default=60000)
@@ -37,6 +38,7 @@ def parse_args():
     parser.add_argument("--preload", action="store_true")
     parser.add_argument("--comment", type=str)
     parser.add_argument("--ckpt", type=str, default=None)
+    parser.add_argument("--train_config", action=ActionConfigFile)
     return vars(parser.parse_args())
 
 

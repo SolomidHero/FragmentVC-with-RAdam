@@ -1,0 +1,8 @@
+sample_rate: 16000
+preemph: 0.97
+hop_len: 320
+win_len: 1280
+n_fft: 2048
+n_mels: 80
+f_min: 80
+f_max: 7600
