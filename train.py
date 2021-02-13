@@ -38,6 +38,7 @@ def parse_args():
     parser.add_argument("--preload", action="store_true")
     parser.add_argument("--comment", type=str)
     parser.add_argument("--ckpt", type=str, default=None)
+    parser.add_argument("--grad_norm_clip", type=float, default=5.0)
     parser.add_argument("--train_config", action=ActionConfigFile)
     return vars(parser.parse_args())
 
@@ -110,6 +111,7 @@ def main(
     preload,
     comment,
     ckpt,
+    grad_norm_clip,
 ):
     """Main function."""
 
@@ -201,6 +203,7 @@ def main(
 
         optimizer.step()
         scheduler.step()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_norm_clip)
         optimizer.zero_grad()
 
         pbar.update()
