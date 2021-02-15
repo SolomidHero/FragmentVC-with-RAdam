@@ -35,6 +35,7 @@ def parse_args():
     parser.add_argument("--n_mels", type=int, default=80)
     parser.add_argument("--f_min", type=int, default=80)
     parser.add_argument("--f_max", type=int, default=None)
+    parser.add_argument("--mel_only", action='store_true')
     parser.add_argument("--audio_config", action=ActionConfigFile)
 
     return vars(parser.parse_args())
@@ -55,6 +56,7 @@ def main(
     n_mels,
     f_min,
     f_max,
+    mel_only,
     **kwargs,
 ):
     """Main function."""
@@ -69,8 +71,9 @@ def main(
     model = torch.jit.load(ckpt_path).to(device).eval()
     print("[INFO] FragmentVC is loaded from", ckpt_path)
 
-    vocoder = torch.jit.load(vocoder_path).to(device).eval()
-    print("[INFO] Vocoder is loaded from", vocoder_path)
+    if not mel_only:
+        vocoder = torch.jit.load(vocoder_path).to(device).eval()
+        print("[INFO] Vocoder is loaded from", vocoder_path)
 
     elaspe_time = datetime.now() - step_moment
     step_moment = datetime.now()
@@ -115,25 +118,31 @@ def main(
         step_moment = datetime.now()
         print("[INFO] elasped time", elaspe_time.total_seconds())
 
-        out_wav = vocoder.generate([out_mel])[0]
-        out_wav = out_wav.cpu().numpy()
-        print("[INFO] generated waveform shape:", out_wav.shape)
+        if not mel_only:
+            out_wav = vocoder.generate([out_mel])[0]
+            out_wav = out_wav.cpu().numpy()
+            print("[INFO] generated waveform shape:", out_wav.shape)
 
-        elaspe_time = datetime.now() - step_moment
-        step_moment = datetime.now()
-        print("[INFO] elasped time", elaspe_time.total_seconds())
+            elaspe_time = datetime.now() - step_moment
+            step_moment = datetime.now()
+            print("[INFO] elasped time", elaspe_time.total_seconds())
 
     wav_path = Path(output_path)
-    sf.write(wav_path, out_wav, sample_rate)
-    print("[INFO] generated waveform is saved to", wav_path)
+    if not mel_only:
+        mel_path = wav_path.with_suffix(".npy")
+        np.save(mel_path, out_mel.cpu().numpy())
+        print("[INFO] mel-spectrogram .npy is saved to", mel_path)
+    else:
+        sf.write(wav_path, out_wav, sample_rate)
+        print("[INFO] generated waveform is saved to", wav_path)
 
-    mel_path = wav_path.with_suffix(".mel.png")
-    plot_mel(out_mel, filename=mel_path)
-    print("[INFO] mel-spectrogram plot is saved to", mel_path)
+        mel_path = wav_path.with_suffix(".mel.png")
+        plot_mel(out_mel, filename=mel_path)
+        print("[INFO] mel-spectrogram plot is saved to", mel_path)
 
-    attn_path = wav_path.with_suffix(".attn.png")
-    plot_attn(attns, filename=attn_path)
-    print("[INFO] attention plot is saved to", attn_path)
+        attn_path = wav_path.with_suffix(".attn.png")
+        plot_attn(attns, filename=attn_path)
+        print("[INFO] attention plot is saved to", attn_path)
 
     elaspe_time = datetime.now() - begin_time
     print("[INFO] Overall elasped time", elaspe_time.total_seconds())
