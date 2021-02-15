@@ -8,8 +8,8 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
-from torch_optimizer import RAdam
 from torch.optim import AdamW
+from torch_optimizer import RAdam
 from torch.utils.data import DataLoader, random_split
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
@@ -153,7 +153,10 @@ def main(
 
     if ckpt is not None:
         ref_included = True
-        start_step = int(ckpt.split('-')[1][4:])
+        try:
+            start_step = int(ckpt.split('-')[1][4:])
+        except:
+            start_step = 0
 
         model = torch.jit.load(ckpt).to(device)
         optimizer = RAdam([
@@ -174,7 +177,7 @@ def main(
 
         model = FragmentVC().to(device)
         model = torch.jit.script(model)
-        optimizer = AdamW(model.parameters(), lr=1e-4)
+        optimizer = RAdam(model.parameters(), lr=1e-4)
         scheduler = get_cosine_schedule_with_warmup(optimizer, warmup_steps, total_steps)
 
     criterion = nn.L1Loss()
@@ -251,7 +254,7 @@ def main(
 
         elif (step + 1) == milestones[0]:
             ref_included = True
-            optimizer = AdamW(
+            optimizer = RAdam(
                 [
                     {"params": model.unet.parameters(), "lr": 1e-6},
                     {"params": model.smoothers.parameters()},

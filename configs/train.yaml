@@ -1,10 +1,10 @@
 save_dir: "."
-total_steps: 60000
+total_steps: 100000
 warmup_steps: 500
 valid_steps: 1000
 log_steps: 100
 save_steps: 5000
-milestones: [15000, 30000]
+milestones: [25000, 50000]
 exclusive_rate: 1.0
 n_samples: 10
 accu_steps: 2
