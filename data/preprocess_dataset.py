@@ -25,6 +25,7 @@ class PreprocessDataset(torch.utils.data.Dataset):
         n_fft,
         n_mels,
         f_min,
+        f_max,
     ):
 
         data = []
@@ -50,6 +51,7 @@ class PreprocessDataset(torch.utils.data.Dataset):
         self.n_fft = n_fft
         self.n_mels = n_mels
         self.f_min = f_min
+        self.f_max = f_max
         self.data = data
 
         if trim_method == "vad":
@@ -82,5 +84,6 @@ class PreprocessDataset(torch.utils.data.Dataset):
             self.hop_len,
             self.win_len,
             self.f_min,
+            self.f_max,
         )
         return speaker_name, audio_path, torch.FloatTensor(wav), torch.FloatTensor(mel)

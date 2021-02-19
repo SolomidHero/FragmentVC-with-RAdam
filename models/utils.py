@@ -6,16 +6,20 @@ import torch
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR
 
-from fairseq.models.wav2vec import Wav2Vec2Model
+# from fairseq.models.wav2vec import Wav2Vec2Model
+from transformers import Wav2Vec2Model
 
 
 def load_pretrained_wav2vec(ckpt_path):
     """Load pretrained Wav2Vec model."""
-    ckpt = torch.load(ckpt_path)
-    model = Wav2Vec2Model.build_model(ckpt["args"], task=None)
-    model.load_state_dict(ckpt["model"])
-    model.remove_pretraining_modules()
-    model.eval()
+    # ckpt = torch.load(ckpt_path)
+    # model = Wav2Vec2Model.build_model(ckpt["args"], task=None)
+    # model.load_state_dict(ckpt["model"])
+    # model.remove_pretraining_modules()
+    # model.eval()
+
+    Wav2Vec2Model.extract_features = lambda self, wav, mask: self(wav).last_hidden_state # for same behaviour as fairseq.Wav2Vec2Model
+    model = Wav2Vec2Model.from_pretrained(ckpt_path)
     return model
 
 
@@ -25,6 +29,7 @@ def get_cosine_schedule_with_warmup(
     num_training_steps: int,
     num_cycles: float = 0.5,
     last_epoch: int = -1,
+    min_lr: float = 1e-7,
 ):
     """
     Create a schedule with a learning rate that decreases following the values of the cosine function between the
@@ -55,7 +60,7 @@ def get_cosine_schedule_with_warmup(
             max(1, num_training_steps - num_warmup_steps)
         )
         return max(
-            0.0, 0.5 * (1.0 + math.cos(math.pi * float(num_cycles) * 2.0 * progress))
+            min_lr, 0.5 * (1.0 + math.cos(math.pi * float(num_cycles) * 2.0 * progress))
         )
 
     return LambdaLR(optimizer, lr_lambda, last_epoch)

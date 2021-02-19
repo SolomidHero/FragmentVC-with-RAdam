@@ -128,7 +128,8 @@ def main(
             print("[INFO] elasped time", elaspe_time.total_seconds())
 
     wav_path = Path(output_path)
-    if not mel_only:
+    wav_path.parent.mkdir(parents=True, exist_ok=True)
+    if mel_only:
         mel_path = wav_path.with_suffix(".npy")
         np.save(mel_path, out_mel.cpu().numpy())
         print("[INFO] mel-spectrogram .npy is saved to", mel_path)
