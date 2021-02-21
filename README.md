@@ -1,3 +1,11 @@
+## Diffs with yistLin/FragmentVC
+
+- RAdam as main optimizer
+- wav2vec2 model from `transformers`
+- train resuming option
+- default config changes
+- `mel_only` converting option
+
 # FragmentVC
 
 Here is the official implementation of the paper, [FragmentVC: Any-to-Any Voice Conversion by End-to-End Extracting and Fusing Fine-Grained Voice Fragments With Attention](https://arxiv.org/abs/2010.14150).
