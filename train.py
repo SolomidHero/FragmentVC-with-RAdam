@@ -160,7 +160,7 @@ def main(
 
         model = torch.jit.load(ckpt).to(device)
         optimizer = RAdam([
-            {"params": model.unet.parameters(), "lr": 1e-6},
+            {"params": model.unet.parameters(), "lr": 1e-5},
             {"params": model.smoothers.parameters()},
             {"params": model.mel_linear.parameters()},
             {"params": model.post_net.parameters()},
@@ -256,7 +256,7 @@ def main(
             ref_included = True
             optimizer = RAdam(
                 [
-                    {"params": model.unet.parameters(), "lr": 1e-6},
+                    {"params": model.unet.parameters(), "lr": 1e-5},
                     {"params": model.smoothers.parameters()},
                     {"params": model.mel_linear.parameters()},
                     {"params": model.post_net.parameters()},

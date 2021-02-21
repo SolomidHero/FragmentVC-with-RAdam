@@ -18,7 +18,7 @@ def load_pretrained_wav2vec(ckpt_path):
     # model.remove_pretraining_modules()
     # model.eval()
 
-    Wav2Vec2Model.extract_features = lambda self, wav, mask: self(wav).last_hidden_state # for same behaviour as fairseq.Wav2Vec2Model
+    Wav2Vec2Model.extract_features = lambda self, wav, mask: [self(wav).last_hidden_state] # for same behaviour as fairseq.Wav2Vec2Model
     model = Wav2Vec2Model.from_pretrained(ckpt_path)
     return model
 

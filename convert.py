@@ -24,7 +24,7 @@ def parse_args():
     parser.add_argument("target_paths", type=str, nargs="+")
     parser.add_argument("-w", "--wav2vec_path", type=str, required=True)
     parser.add_argument("-c", "--ckpt_path", type=str, required=True)
-    parser.add_argument("-v", "--vocoder_path", type=str, required=True)
+    parser.add_argument("-v", "--vocoder_path", type=str, default="vocoder.pt")
     parser.add_argument("-o", "--output_path", type=str, default="output.wav")
 
     parser.add_argument("--sample_rate", type=int, default=16000)

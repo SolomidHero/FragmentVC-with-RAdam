@@ -138,7 +138,7 @@ def main(
         ):
             out_path = Path(out_dir, pair_name)
 
-            np.save(out_path.with_suffix(".npy"), out_mel)
+            np.save(out_path.with_suffix(".npy"), out_mel.cpu().numpy())
 
 
 
