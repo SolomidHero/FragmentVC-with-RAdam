@@ -11,4 +11,4 @@ accu_steps: 2
 batch_size: 8
 n_workers: 8
 comment: null
-grad_norm_clip: 5
+grad_norm_clip: 10.0

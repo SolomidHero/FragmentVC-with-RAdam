@@ -34,6 +34,7 @@ def parse_args():
     parser.add_argument("--f_min", type=int, default=80)
     parser.add_argument("--f_max", type=int, default=None)
     parser.add_argument("--mel_only", action='store_true')
+    parser.add_argument("--plot", action='store_true')
     parser.add_argument("--audio_config", action=ActionConfigFile)
 
     return vars(parser.parse_args())
@@ -54,6 +55,7 @@ def main(
     f_min,
     f_max,
     mel_only,
+    plot
     **kwargs,
 ):
     """Main function."""
@@ -106,39 +108,43 @@ def main(
             out_mel, attn = model(src_feat, tgt_mel)
             out_mel = out_mel.transpose(1, 2).squeeze(0)
 
-            out_mels.append(out_mel)
+            out_mels.append(out_mel.cpu() if mel_only else out_mel)
             attns.append(attn)
 
         print(f"[INFO] Pair {pair_name} converted")
 
-    print("[INFO] Generating waveforms...")
 
     if not mel_only:
+        print("[INFO] Generating waveforms...")
         with torch.no_grad():
             out_wavs = vocoder.generate(out_mels)
-
-    print("[INFO] Waveforms generated")
+        print("[INFO] Waveforms generated")
 
     out_dir = Path(output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    if plot:
+        print("[INFO] Generating plots...")
+        for pair_name, out_mel, attn in zip(
+            infos.keys(), out_mels, attns
+        ):
+            out_path = Path(out_dir, pair_name)
+            plot_mel(out_mel, filename=out_path.with_suffix(".mel.png"))
+            plot_attn(attn, filename=out_path.with_suffix(".attn.png"))
+
+    print("[INFO] Saving results...")
     if not mel_only:
         for pair_name, out_mel, out_wav, attn in zip(
             infos.keys(), out_mels, out_wavs, attns
         ):
-            out_wav = out_wav.cpu().numpy()
             out_path = Path(out_dir, pair_name)
-
-            plot_mel(out_mel, filename=out_path.with_suffix(".mel.png"))
-            plot_attn(attn, filename=out_path.with_suffix(".attn.png"))
-            sf.write(out_path.with_suffix(".wav"), out_wav, sample_rate)
+            sf.write(out_path.with_suffix(".wav"), out_wav.cpu().numpy(), sample_rate)
     else:
         for pair_name, out_mel, attn in zip(
             infos.keys(), out_mels, attns
         ):
             out_path = Path(out_dir, pair_name)
-
-            np.save(out_path.with_suffix(".npy"), out_mel.cpu().numpy())
+            np.save(out_path.with_suffix(".npy"), out_mel)
 
 
 

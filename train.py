@@ -38,7 +38,7 @@ def parse_args():
     parser.add_argument("--preload", action="store_true")
     parser.add_argument("--comment", type=str)
     parser.add_argument("--ckpt", type=str, default=None)
-    parser.add_argument("--grad_norm_clip", type=float, default=5.0)
+    parser.add_argument("--grad_norm_clip", type=float, default=10.0)
     parser.add_argument("--train_config", action=ActionConfigFile)
     return vars(parser.parse_args())
 
@@ -112,6 +112,7 @@ def main(
     comment,
     ckpt,
     grad_norm_clip,
+    **kwargs,
 ):
     """Main function."""
 
@@ -152,11 +153,12 @@ def main(
     save_dir_path.mkdir(parents=True, exist_ok=True)
 
     if ckpt is not None:
-        ref_included = True
         try:
             start_step = int(ckpt.split('-')[1][4:])
+            ref_included = True
         except:
             start_step = 0
+            ref_included = False
 
         model = torch.jit.load(ckpt).to(device)
         optimizer = RAdam([

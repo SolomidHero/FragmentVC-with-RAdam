@@ -36,6 +36,7 @@ def parse_args():
     parser.add_argument("--f_min", type=int, default=80)
     parser.add_argument("--f_max", type=int, default=None)
     parser.add_argument("--mel_only", action='store_true')
+    parser.add_argument("--plot", action='store_true')
     parser.add_argument("--audio_config", action=ActionConfigFile)
 
     return vars(parser.parse_args())
@@ -57,6 +58,7 @@ def main(
     f_min,
     f_max,
     mel_only,
+    plot,
     **kwargs,
 ):
     """Main function."""
@@ -137,6 +139,7 @@ def main(
         sf.write(wav_path, out_wav, sample_rate)
         print("[INFO] generated waveform is saved to", wav_path)
 
+    if plot:
         mel_path = wav_path.with_suffix(".mel.png")
         plot_mel(out_mel, filename=mel_path)
         print("[INFO] mel-spectrogram plot is saved to", mel_path)
