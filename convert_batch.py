@@ -55,7 +55,7 @@ def main(
     f_min,
     f_max,
     mel_only,
-    plot
+    plot,
     **kwargs,
 ):
     """Main function."""
