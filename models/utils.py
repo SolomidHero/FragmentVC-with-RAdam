@@ -18,7 +18,11 @@ def load_pretrained_wav2vec(ckpt_path):
     # model.remove_pretraining_modules()
     # model.eval()
 
-    Wav2Vec2Model.extract_features = lambda self, wav, mask: [self(wav).last_hidden_state] # for same behaviour as fairseq.Wav2Vec2Model
+    def extract_features(self, wav, mask):
+        # wav2vec has window of 400, so we pad to center windows
+        return [self(torch.nn.functional.pad(wav, (200, 200), mode='reflect')).last_hidden_state]
+
+    Wav2Vec2Model.extract_features = extract_features # for same behaviour as fairseq.Wav2Vec2Model
     model = Wav2Vec2Model.from_pretrained(ckpt_path)
     return model
 
