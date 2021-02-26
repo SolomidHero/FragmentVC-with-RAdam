@@ -4,7 +4,7 @@
 import warnings
 from pathlib import Path
 from functools import partial
-from multiprocessing import Pool, cpu_count
+from torch.multiprocessing import Pool, cpu_count
 
 import yaml
 import torch
@@ -34,6 +34,7 @@ def parse_args():
     parser.add_argument("--f_min", type=int, default=80)
     parser.add_argument("--f_max", type=int, default=None)
     parser.add_argument("--mel_only", action='store_true')
+    parser.add_argument("--trim", action='store_true')
     parser.add_argument("--plot", action='store_true')
     parser.add_argument("--audio_config", action=ActionConfigFile)
 
@@ -56,6 +57,7 @@ def main(
     f_max,
     mel_only,
     plot,
+    trim,
     **kwargs,
 ):
     """Main function."""
@@ -90,10 +92,11 @@ def main(
 
     out_mels = []
     attns = []
+    pair_names = []
 
     for pair_name, pair in infos.items():
-        src_wav = load_wav(pair["source"], sample_rate, trim=True)
-        src_wav = torch.FloatTensor(src_wav).unsqueeze(0).to(device)
+        if isinstance(pair["source"], str):
+            pair["source"] = { pair_name: pair["source"] }
 
         with Pool(cpu_count()) as pool:
             tgt_wavs = pool.map(path2wav, pair["target"])
@@ -102,16 +105,22 @@ def main(
         tgt_mel = np.concatenate(tgt_mels, axis=0)
         tgt_mel = torch.FloatTensor(tgt_mel.T).unsqueeze(0).to(device)
 
-        with torch.no_grad():
-            src_feat = wav2vec.extract_features(src_wav, None)[0]
 
-            out_mel, attn = model(src_feat, tgt_mel)
-            out_mel = out_mel.transpose(1, 2).squeeze(0)
+        pair_names.extend(pair["source"].keys())
+        for cur_pair_name, source in pair["source"].items():
+            src_wav = load_wav(source, sample_rate, trim=trim)
+            src_wav = torch.FloatTensor(src_wav).unsqueeze(0).to(device)
 
-            out_mels.append(out_mel.cpu() if mel_only else out_mel)
-            attns.append(attn)
+            with torch.no_grad():
+                src_feat = wav2vec.extract_features(src_wav, None)[0]
 
-        print(f"[INFO] Pair {pair_name} converted")
+                out_mel, attn = model(src_feat, tgt_mel)
+                out_mel = out_mel.transpose(1, 2).squeeze(0)
+
+                out_mels.append(out_mel.cpu() if mel_only else out_mel)
+                attns.append(attn)
+
+            print(f"[INFO] Pair {cur_pair_name} converted")
 
 
     if not mel_only:
@@ -126,7 +135,7 @@ def main(
     if plot:
         print("[INFO] Generating plots...")
         for pair_name, out_mel, attn in zip(
-            infos.keys(), out_mels, attns
+            pair_names, out_mels, attns
         ):
             out_path = Path(out_dir, pair_name)
             plot_mel(out_mel, filename=out_path.with_suffix(".mel.png"))
@@ -135,13 +144,13 @@ def main(
     print("[INFO] Saving results...")
     if not mel_only:
         for pair_name, out_mel, out_wav, attn in zip(
-            infos.keys(), out_mels, out_wavs, attns
+            pair_names, out_mels, out_wavs, attns
         ):
             out_path = Path(out_dir, pair_name)
             sf.write(out_path.with_suffix(".wav"), out_wav.cpu().numpy(), sample_rate)
     else:
         for pair_name, out_mel, attn in zip(
-            infos.keys(), out_mels, attns
+            pair_names, out_mels, attns
         ):
             out_path = Path(out_dir, pair_name)
             np.save(out_path.with_suffix(".npy"), out_mel)
