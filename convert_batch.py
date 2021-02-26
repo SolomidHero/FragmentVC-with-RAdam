@@ -118,7 +118,8 @@ def main(
                 out_mel = out_mel.transpose(1, 2).squeeze(0)
 
                 out_mels.append(out_mel.cpu() if mel_only else out_mel)
-                attns.append(attn)
+                if plot:
+                    attns.append([x.cpu() for x in attn])
 
             print(f"[INFO] Pair {cur_pair_name} converted")
 
@@ -143,14 +144,14 @@ def main(
 
     print("[INFO] Saving results...")
     if not mel_only:
-        for pair_name, out_mel, out_wav, attn in zip(
-            pair_names, out_mels, out_wavs, attns
+        for pair_name, out_mel, out_wav in zip(
+            pair_names, out_mels, out_wavs
         ):
             out_path = Path(out_dir, pair_name)
             sf.write(out_path.with_suffix(".wav"), out_wav.cpu().numpy(), sample_rate)
     else:
-        for pair_name, out_mel, attn in zip(
-            pair_names, out_mels, attns
+        for pair_name, out_mel in zip(
+            pair_names, out_mels
         ):
             out_path = Path(out_dir, pair_name)
             np.save(out_path.with_suffix(".npy"), out_mel)
