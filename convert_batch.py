@@ -102,6 +102,13 @@ def main(
             tgt_wavs = pool.map(path2wav, pair["target"])
             tgt_mels = pool.map(wav2mel, tgt_wavs)
 
+        with torch.no_grad():
+          tgt_feats = list(map(
+            lambda x: wav2vec.extract_features(torch.from_numpy(x[None]).to(device), None)[0],
+            tgt_wavs
+          ))
+        tgt_feat = torch.cat(tgt_feats, dim=1)
+
         tgt_mel = np.concatenate(tgt_mels, axis=0)
         tgt_mel = torch.FloatTensor(tgt_mel.T).unsqueeze(0).to(device)
 
