@@ -100,6 +100,8 @@ def main(
             feat = feat.detach().cpu().squeeze(0)
             mel = mel.squeeze(0)
 
+            assert mel.shape == feat.shape
+
         fd, temp_file = mkstemp(suffix=".tar", prefix="utterance-", dir=out_dir_path)
         torch.save({"feat": feat, "mel": mel}, temp_file)
         os.close(fd)

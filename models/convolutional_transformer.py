@@ -79,6 +79,7 @@ class Extractor(Module):
         memory_mask: Optional[Tensor] = None,
         tgt_key_padding_mask: Optional[Tensor] = None,
         memory_key_padding_mask: Optional[Tensor] = None,
+        memory_features: Optional[Tensor] = None,
     ) -> Tuple[Tensor, Optional[Tensor]]:
         # multi-head self attention
         tgt2 = self.self_attn(
@@ -92,7 +93,7 @@ class Extractor(Module):
         # multi-head cross attention
         tgt2, attn = self.cross_attn(
             tgt,
-            memory,
+            memory if memory_features is None else memory_features,
             memory,
             attn_mask=memory_mask,
             key_padding_mask=memory_key_padding_mask,

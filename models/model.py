@@ -50,6 +50,7 @@ class FragmentVC(nn.Module):
         self,
         srcs: Tensor,
         refs: Tensor,
+        refs_features: Optional[Tensor] = None,
         src_masks: Optional[Tensor] = None,
         ref_masks: Optional[Tensor] = None,
     ) -> Tuple[Tensor, List[Optional[Tensor]]]:
@@ -63,7 +64,7 @@ class FragmentVC(nn.Module):
         """
 
         # out: (src_len, batch, d_model)
-        out, attns = self.unet(srcs, refs, src_masks=src_masks, ref_masks=ref_masks)
+        out, attns = self.unet(srcs, refs, refs_features=refs_features, src_masks=src_masks, ref_masks=ref_masks)
 
         # out: (src_len, batch, d_model)
         out = self.smoothers(out, src_key_padding_mask=src_masks)
@@ -104,6 +105,7 @@ class UnetBlock(nn.Module):
         refs: Tensor,
         src_masks: Optional[Tensor] = None,
         ref_masks: Optional[Tensor] = None,
+        refs_features: Optional[Tensor] = None,
     ) -> Tuple[Tensor, List[Optional[Tensor]]]:
         """Forward function.
 
@@ -128,6 +130,7 @@ class UnetBlock(nn.Module):
         out, attn1 = self.extractor1(
             tgt,
             ref3.transpose(1, 2).transpose(0, 1),
+            memory_features=refs_features,
             tgt_key_padding_mask=src_masks,
             memory_key_padding_mask=ref_masks,
         )
