@@ -59,7 +59,7 @@ def model_fn(batch, model, criterion, self_exclude, ref_included, device):
     if ref_included:
         if random.random() >= self_exclude:
             refs = torch.cat((refs, tgts), dim=2)
-            refs_features = torch.cat((refs_features, srcs), dim=2) if refs_features is not None else refs_features
+            refs_features = torch.cat((refs_features, srcs), dim=1) if refs_features is not None else refs_features
             ref_masks = torch.cat((ref_masks, tgt_masks), dim=1)
     else:
         refs = tgts

@@ -95,6 +95,9 @@ class UnetBlock(nn.Module):
         self.prenet = nn.Sequential(
             nn.Linear(768, 768), nn.ReLU(), nn.Linear(768, d_model),
         )
+        self.features_prenet = nn.Sequential(
+            nn.Linear(768, 768), nn.ReLU(), nn.Linear(768, d_model),
+        )
 
         self.extractor1 = Extractor(d_model, 2, 1024, no_residual=True)
         self.extractor2 = Extractor(d_model, 2, 1024)
@@ -120,7 +123,7 @@ class UnetBlock(nn.Module):
 
         # tgt: (batch, tgt_len, d_model)
         tgt = self.prenet(srcs)
-        refs_features = None if refs_features is None else self.prenet(refs_features)
+        refs_features = None if refs_features is None else self.features_prenet(refs_features)
 
         # tgt: (tgt_len, batch, d_model)
         tgt = tgt.transpose(0, 1)
