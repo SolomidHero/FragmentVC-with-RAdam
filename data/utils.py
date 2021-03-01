@@ -83,12 +83,12 @@ def plot_attn(attn, filename="attn.png"):
     fig, axes = plt.subplots(len(attn), 1, squeeze=False, figsize=(10, 10))
 
     for i, layer_attn in enumerate(attn):
-        axes[i][0].imshow(attn[i][0].detach().cpu().numpy(), origin="lower")
+        im = axes[i][0].imshow(attn[i][0].detach().cpu().numpy(), aspect='auto', origin="lower")
         axes[i][0].set_title("layer {}".format(i), fontsize="medium")
         axes[i][0].tick_params(labelsize="x-small")
         axes[i][0].set_xlabel("target")
         axes[i][0].set_ylabel("source")
-
+        fig.colorbar(im, ax=axes[i][0])
     plt.tight_layout()
     plt.savefig(filename)
     plt.close()
