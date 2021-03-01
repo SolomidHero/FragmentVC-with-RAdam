@@ -52,12 +52,12 @@ class Extractor(Module):
     """Convolutional Transformer Decoder Layer"""
 
     def __init__(
-        self, d_model: int, nhead: int, d_hid: int, dropout=0.1, no_residual=False,
+        self, d_model: int, nhead: int, d_hid: int, dropout=0.1, no_residual=False, ca_kdim=None
     ):
         super(Extractor, self).__init__()
 
         self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout)
-        self.cross_attn = MultiheadAttention(d_model, nhead, dropout=dropout)
+        self.cross_attn = MultiheadAttention(d_model, nhead, dropout=dropout, kdim=ca_kdim)
 
         self.conv1 = Conv1d(d_model, d_hid, 9, padding=4)
         self.conv2 = Conv1d(d_hid, d_model, 1, padding=0)
@@ -93,7 +93,7 @@ class Extractor(Module):
         # multi-head cross attention
         tgt2, attn = self.cross_attn(
             tgt,
-            memory if memory_features is None else memory_features,
+            memory if memory_features is None else memory_features.transpose(0, 1),
             memory,
             attn_mask=memory_mask,
             key_padding_mask=memory_key_padding_mask,

@@ -51,7 +51,7 @@ def model_fn(batch, model, criterion, self_exclude, ref_included, device):
     srcs = srcs.to(device)
     src_masks = src_masks.to(device)
     refs = refs.to(device)
-    refs_features = refs_features.to(device) if refs_features else refs_features
+    refs_features = refs_features.to(device) if refs_features is not None else refs_features
     ref_masks = ref_masks.to(device)
     tgts = tgts.to(device)
     tgt_masks = tgt_masks.to(device)
@@ -59,11 +59,11 @@ def model_fn(batch, model, criterion, self_exclude, ref_included, device):
     if ref_included:
         if random.random() >= self_exclude:
             refs = torch.cat((refs, tgts), dim=2)
-            refs_features = torch.cat((refs_features, srcs), dim=2) if refs_features else refs_features
+            refs_features = torch.cat((refs_features, srcs), dim=2) if refs_features is not None else refs_features
             ref_masks = torch.cat((ref_masks, tgt_masks), dim=1)
     else:
         refs = tgts
-        refs_features = srcs
+        refs_features = srcs if refs_features is not None else refs_features
         ref_masks = tgt_masks
 
     outs, _ = model(srcs, refs, refs_features=refs_features, src_masks=src_masks, ref_masks=ref_masks)

@@ -60,6 +60,7 @@ class FragmentVC(nn.Module):
             srcs: (batch, src_len, 768)
             src_masks: (batch, src_len)
             refs: (batch, 80, ref_len)
+            refs_features: (batch, ref_len, 768)
             ref_masks: (batch, ref_len)
         """
 
@@ -113,11 +114,14 @@ class UnetBlock(nn.Module):
             srcs: (batch, src_len, 768)
             src_masks: (batch, src_len)
             refs: (batch, 80, ref_len)
+            refs_features: (batch, ref_len, 768)
             ref_masks: (batch, ref_len)
         """
 
         # tgt: (batch, tgt_len, d_model)
         tgt = self.prenet(srcs)
+        refs_features = None if refs_features is None else self.prenet(refs_features)
+
         # tgt: (tgt_len, batch, d_model)
         tgt = tgt.transpose(0, 1)
 
