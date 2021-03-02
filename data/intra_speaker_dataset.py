@@ -126,8 +126,7 @@ def collate_batch(batch):
     refs = refs.transpose(1, 2)  # (batch, mel_dim, max_ref_len)
 
     if refs_features:
-        refs_features = pad_sequence(refs_features, batch_first=True, padding_value=0)
-        refs_features = refs_features.transpose(1, 2)  # (batch, mel_dim, max_ref_len)
+        refs_features = pad_sequence(refs_features, batch_first=True, padding_value=0) # (batch, max_ref_len, wav2vec_dim)
 
     ref_masks = [torch.arange(refs.size(2)) >= ref_len for ref_len in ref_lens]
     ref_masks = torch.stack(ref_masks)  # (batch, max_ref_len)
