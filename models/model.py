@@ -107,9 +107,9 @@ class UnetBlock(nn.Module):
         self,
         srcs: Tensor,
         refs: Tensor,
+        refs_features: Optional[Tensor] = None,
         src_masks: Optional[Tensor] = None,
         ref_masks: Optional[Tensor] = None,
-        refs_features: Optional[Tensor] = None,
     ) -> Tuple[Tensor, List[Optional[Tensor]]]:
         """Forward function.
 
@@ -137,7 +137,7 @@ class UnetBlock(nn.Module):
         out, attn1 = self.extractor1(
             tgt,
             ref3.transpose(1, 2).transpose(0, 1),
-            memory_features=refs_features,
+            memory_features=refs_features.transpose(0, 1),
             tgt_key_padding_mask=src_masks,
             memory_key_padding_mask=ref_masks,
         )

@@ -37,6 +37,7 @@ def parse_args():
     parser.add_argument("--f_max", type=int, default=None)
     parser.add_argument("--mel_only", action='store_true')
     parser.add_argument("--plot", action='store_true')
+    parser.add_argument("--use_target_features", action='store_true')
     parser.add_argument("--audio_config", action=ActionConfigFile)
 
     return vars(parser.parse_args())
@@ -59,6 +60,7 @@ def main(
     f_max,
     mel_only,
     plot,
+    use_target_features,
     **kwargs,
 ):
     """Main function."""
@@ -91,6 +93,7 @@ def main(
     print("[INFO] source waveform shape:", src_wav.shape)
 
     tgt_mels = []
+    tgt_feats = []
     for tgt_path in target_paths:
         tgt_wav = load_wav(tgt_path, sample_rate)
         tgt_wav = tfm.build_array(input_array=tgt_wav, sample_rate_in=sample_rate)
@@ -99,6 +102,15 @@ def main(
             tgt_wav, preemph, sample_rate, n_mels, n_fft, hop_len, win_len, f_min, f_max
         )
         tgt_mels.append(tgt_mel)
+        if use_target_features:
+            with torch.no_grad():
+                tgt_feats.append(wav2vec.extract_features(torch.from_numpy(tgt_wav[None]).to(device), None)[0])
+
+
+    if use_target_features:
+        tgt_feat = torch.cat(tgt_feats, dim=1)
+    else:
+        tgt_feat = None
 
     tgt_mel = np.concatenate(tgt_mels, axis=0)
     tgt_mel = torch.FloatTensor(tgt_mel.T).unsqueeze(0).to(device)

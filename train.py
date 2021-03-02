@@ -39,6 +39,7 @@ def parse_args():
     parser.add_argument("--comment", type=str)
     parser.add_argument("--ckpt", type=str, default=None)
     parser.add_argument("--grad_norm_clip", type=float, default=10.0)
+    parser.add_argument("--use_target_features", action='store_true')
     parser.add_argument("--train_config", action=ActionConfigFile)
     return vars(parser.parse_args())
 
@@ -115,6 +116,7 @@ def main(
     comment,
     ckpt,
     grad_norm_clip,
+    use_target_features,
     **kwargs,
 ):
     """Main function."""
@@ -123,7 +125,7 @@ def main(
 
     metadata_path = Path(data_dir) / "metadata.json"
 
-    dataset = IntraSpeakerDataset(data_dir, metadata_path, n_samples, preload)
+    dataset = IntraSpeakerDataset(data_dir, metadata_path, n_samples, preload, ref_feat=use_target_features)
     trainlen = int(0.9 * len(dataset))
     lengths = [trainlen, len(dataset) - trainlen]
     trainset, validset = random_split(dataset, lengths)
