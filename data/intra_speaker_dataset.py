@@ -20,7 +20,7 @@ class IntraSpeakerDataset(Dataset):
         mel: log mel spectrogram tensor.
     """
 
-    def __init__(self, data_dir, metadata_path, n_samples=5, pre_load=False):
+    def __init__(self, data_dir, metadata_path, n_samples=5, pre_load=False, ref_feat=False):
         with open(metadata_path, "r") as f:
             metadata = json.load(f)
 
@@ -53,6 +53,7 @@ class IntraSpeakerDataset(Dataset):
         self.data_dir = Path(data_dir)
         self.n_samples = n_samples
         self.pre_load = pre_load
+        self.ref_feat = ref_feat
 
     def __len__(self):
         return len(self.data)
@@ -70,11 +71,17 @@ class IntraSpeakerDataset(Dataset):
         utterance_indices.remove(index)
 
         sampled_mels = []
+        sampled_feats = []
         for sampled_id in random.sample(utterance_indices, self.n_samples):
-            sampled_mel = self._get_data(sampled_id)[2]
+            _, sampled_feat, sampled_mel = self._get_data(sampled_id)
             sampled_mels.append(sampled_mel)
+            sampled_feats.append(sampled_feat)
 
         reference_mels = torch.cat(sampled_mels, dim=0)
+
+        if self.ref_feat:
+            reference_feats = torch.cat(sampled_feats, dim=0)
+            return content_emb, (reference_mels, reference_feats), target_mel
 
         return content_emb, reference_mels, target_mel
 
@@ -98,6 +105,11 @@ def collate_batch(batch):
     """Collate a batch of data."""
     srcs, refs, tgts = zip(*batch)
 
+    if len(refs[0]) == 2:
+        refs, refs_features = zip(*refs)
+    else:
+        refs_features = None
+
     src_lens = [len(src) for src in srcs]
     ref_lens = [len(ref) for ref in refs]
     tgt_lens = [len(tgt) for tgt in tgts]
@@ -113,6 +125,9 @@ def collate_batch(batch):
     refs = pad_sequence(refs, batch_first=True, padding_value=-20)
     refs = refs.transpose(1, 2)  # (batch, mel_dim, max_ref_len)
 
+    if refs_features:
+        refs_features = pad_sequence(refs_features, batch_first=True, padding_value=0) # (batch, max_ref_len, wav2vec_dim)
+
     ref_masks = [torch.arange(refs.size(2)) >= ref_len for ref_len in ref_lens]
     ref_masks = torch.stack(ref_masks)  # (batch, max_ref_len)
 
@@ -122,4 +137,4 @@ def collate_batch(batch):
     tgt_masks = [torch.arange(tgts.size(2)) >= tgt_len for tgt_len in tgt_lens]
     tgt_masks = torch.stack(tgt_masks)  # (batch, max_tgt_len)
 
-    return srcs, src_masks, refs, ref_masks, tgts, tgt_masks, overlap_lens
+    return srcs, src_masks, (refs, refs_features), ref_masks, tgts, tgt_masks, overlap_lens

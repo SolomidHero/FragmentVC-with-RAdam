@@ -36,6 +36,7 @@ def parse_args():
     parser.add_argument("--mel_only", action='store_true')
     parser.add_argument("--trim", action='store_true')
     parser.add_argument("--plot", action='store_true')
+    parser.add_argument("--use_target_features", action='store_true')
     parser.add_argument("--audio_config", action=ActionConfigFile)
 
     return vars(parser.parse_args())
@@ -58,6 +59,7 @@ def main(
     mel_only,
     plot,
     trim,
+    use_target_features,
     **kwargs,
 ):
     """Main function."""
@@ -101,6 +103,16 @@ def main(
         with Pool(cpu_count()) as pool:
             tgt_wavs = pool.map(path2wav, pair["target"])
             tgt_mels = pool.map(wav2mel, tgt_wavs)
+
+        if use_target_features:
+            with torch.no_grad():
+                tgt_feats = list(map(
+                    lambda x: wav2vec.extract_features(torch.from_numpy(x[None]).to(device), None)[0],
+                    tgt_wavs
+                ))
+            tgt_feat = torch.cat(tgt_feats, dim=1)
+        else:
+            tgt_feat = None
 
         tgt_mel = np.concatenate(tgt_mels, axis=0)
         tgt_mel = torch.FloatTensor(tgt_mel.T).unsqueeze(0).to(device)

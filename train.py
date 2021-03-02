@@ -39,6 +39,7 @@ def parse_args():
     parser.add_argument("--comment", type=str)
     parser.add_argument("--ckpt", type=str, default=None)
     parser.add_argument("--grad_norm_clip", type=float, default=10.0)
+    parser.add_argument("--use_target_features", action='store_true')
     parser.add_argument("--train_config", action=ActionConfigFile)
     return vars(parser.parse_args())
 
@@ -46,11 +47,12 @@ def parse_args():
 def model_fn(batch, model, criterion, self_exclude, ref_included, device):
     """Forward a batch through model."""
 
-    srcs, src_masks, refs, ref_masks, tgts, tgt_masks, overlap_lens = batch
+    srcs, src_masks, (refs, refs_features), ref_masks, tgts, tgt_masks, overlap_lens = batch
 
     srcs = srcs.to(device)
     src_masks = src_masks.to(device)
     refs = refs.to(device)
+    refs_features = refs_features.to(device) if refs_features is not None else refs_features
     ref_masks = ref_masks.to(device)
     tgts = tgts.to(device)
     tgt_masks = tgt_masks.to(device)
@@ -58,12 +60,14 @@ def model_fn(batch, model, criterion, self_exclude, ref_included, device):
     if ref_included:
         if random.random() >= self_exclude:
             refs = torch.cat((refs, tgts), dim=2)
+            refs_features = torch.cat((refs_features, srcs), dim=1) if refs_features is not None else refs_features
             ref_masks = torch.cat((ref_masks, tgt_masks), dim=1)
     else:
         refs = tgts
+        refs_features = srcs if refs_features is not None else refs_features
         ref_masks = tgt_masks
 
-    outs, _ = model(srcs, refs, src_masks=src_masks, ref_masks=ref_masks)
+    outs, _ = model(srcs, refs, refs_features=refs_features, src_masks=src_masks, ref_masks=ref_masks)
 
     losses = []
     for out, tgt, overlap_len in zip(outs.unbind(), tgts.unbind(), overlap_lens):
@@ -112,6 +116,7 @@ def main(
     comment,
     ckpt,
     grad_norm_clip,
+    use_target_features,
     **kwargs,
 ):
     """Main function."""
@@ -120,7 +125,7 @@ def main(
 
     metadata_path = Path(data_dir) / "metadata.json"
 
-    dataset = IntraSpeakerDataset(data_dir, metadata_path, n_samples, preload)
+    dataset = IntraSpeakerDataset(data_dir, metadata_path, n_samples, preload, ref_feat=use_target_features)
     trainlen = int(0.9 * len(dataset))
     lengths = [trainlen, len(dataset) - trainlen]
     trainset, validset = random_split(dataset, lengths)
@@ -162,7 +167,7 @@ def main(
 
         model = torch.jit.load(ckpt).to(device)
         optimizer = RAdam([
-            {"params": model.unet.parameters(), "lr": 1e-5},
+            {"params": model.unet.parameters(), "lr": 1e-6},
             {"params": model.smoothers.parameters()},
             {"params": model.mel_linear.parameters()},
             {"params": model.post_net.parameters()},
@@ -258,7 +263,7 @@ def main(
             ref_included = True
             optimizer = RAdam(
                 [
-                    {"params": model.unet.parameters(), "lr": 1e-5},
+                    {"params": model.unet.parameters(), "lr": 1e-6},
                     {"params": model.smoothers.parameters()},
                     {"params": model.mel_linear.parameters()},
                     {"params": model.post_net.parameters()},

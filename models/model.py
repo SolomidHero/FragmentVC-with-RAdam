@@ -50,6 +50,7 @@ class FragmentVC(nn.Module):
         self,
         srcs: Tensor,
         refs: Tensor,
+        refs_features: Optional[Tensor] = None,
         src_masks: Optional[Tensor] = None,
         ref_masks: Optional[Tensor] = None,
     ) -> Tuple[Tensor, List[Optional[Tensor]]]:
@@ -59,11 +60,12 @@ class FragmentVC(nn.Module):
             srcs: (batch, src_len, 768)
             src_masks: (batch, src_len)
             refs: (batch, 80, ref_len)
+            refs_features: (batch, ref_len, 768)
             ref_masks: (batch, ref_len)
         """
 
         # out: (src_len, batch, d_model)
-        out, attns = self.unet(srcs, refs, src_masks=src_masks, ref_masks=ref_masks)
+        out, attns = self.unet(srcs, refs, refs_features=refs_features, src_masks=src_masks, ref_masks=ref_masks)
 
         # out: (src_len, batch, d_model)
         out = self.smoothers(out, src_key_padding_mask=src_masks)
@@ -93,6 +95,9 @@ class UnetBlock(nn.Module):
         self.prenet = nn.Sequential(
             nn.Linear(768, 768), nn.ReLU(), nn.Linear(768, d_model),
         )
+        self.features_prenet = nn.Sequential(
+            nn.Linear(768, 768), nn.ReLU(), nn.Linear(768, d_model),
+        )
 
         self.extractor1 = Extractor(d_model, 2, 1024, no_residual=True)
         self.extractor2 = Extractor(d_model, 2, 1024)
@@ -102,6 +107,7 @@ class UnetBlock(nn.Module):
         self,
         srcs: Tensor,
         refs: Tensor,
+        refs_features: Optional[Tensor] = None,
         src_masks: Optional[Tensor] = None,
         ref_masks: Optional[Tensor] = None,
     ) -> Tuple[Tensor, List[Optional[Tensor]]]:
@@ -111,11 +117,14 @@ class UnetBlock(nn.Module):
             srcs: (batch, src_len, 768)
             src_masks: (batch, src_len)
             refs: (batch, 80, ref_len)
+            refs_features: (batch, ref_len, 768)
             ref_masks: (batch, ref_len)
         """
 
         # tgt: (batch, tgt_len, d_model)
         tgt = self.prenet(srcs)
+        refs_features = None if refs_features is None else self.features_prenet(refs_features)
+
         # tgt: (tgt_len, batch, d_model)
         tgt = tgt.transpose(0, 1)
 
@@ -128,6 +137,7 @@ class UnetBlock(nn.Module):
         out, attn1 = self.extractor1(
             tgt,
             ref3.transpose(1, 2).transpose(0, 1),
+            memory_features=refs_features.transpose(0, 1),
             tgt_key_padding_mask=src_masks,
             memory_key_padding_mask=ref_masks,
         )
