@@ -15,9 +15,14 @@ from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 from jsonargparse import ArgumentParser, ActionConfigFile
 
-from data import IntraSpeakerDataset, collate_batch
-from models import FragmentVC, get_cosine_schedule_with_warmup
+from data import IntraSpeakerDataset, collate_batch, infinite_iterator, get_mel_plot
+from models import (
+    FragmentVC, Discriminator,
+    adversarial_loss, discriminator_loss, get_cosine_schedule_with_warmup
+)
 
+
+criterion = nn.L1Loss()
 
 def parse_args():
     """Parse command-line arguments."""
@@ -40,11 +45,13 @@ def parse_args():
     parser.add_argument("--ckpt", type=str, default=None)
     parser.add_argument("--grad_norm_clip", type=float, default=10.0)
     parser.add_argument("--use_target_features", action='store_true')
+    parser.add_argument("--adv", action="store_true")
+    parser.add_argument("--d_ckpt", type=str, default=None)
     parser.add_argument("--train_config", action=ActionConfigFile)
     return vars(parser.parse_args())
 
 
-def model_fn(batch, model, criterion, self_exclude, ref_included, device):
+def model_fn(batch, model, self_exclude, ref_included, device):
     """Forward a batch through model."""
 
     srcs, src_masks, (refs, refs_features), ref_masks, tgts, tgt_masks, overlap_lens = batch
@@ -69,15 +76,49 @@ def model_fn(batch, model, criterion, self_exclude, ref_included, device):
 
     outs, _ = model(srcs, refs, refs_features=refs_features, src_masks=src_masks, ref_masks=ref_masks)
 
-    losses = []
-    for out, tgt, overlap_len in zip(outs.unbind(), tgts.unbind(), overlap_lens):
-        loss = criterion(out[:, :overlap_len], tgt[:, :overlap_len])
-        losses.append(loss)
-
-    return sum(losses) / len(losses)
+    return outs, tgts
 
 
-def valid(dataloader, model, criterion, device):
+def training_step(batches, model, g_optimizer, g_scheduler, disc=None, d_optimizer=None, d_scheduler=None,
+        device='cuda', grad_norm_clip=10, self_exclude=1.0, ref_included=True):
+
+    if disc is not None:
+        d_loss = []
+        for batch in batches:
+            with torch.no_grad():
+                outs, tgts = model_fn(batch, model, self_exclude, ref_included, device)
+            d_loss.append(0.05 * discriminator_loss(disc(outs), disc(tgts)))
+
+        d_loss = sum(d_loss) / len(batches)
+
+        d_optimizer.zero_grad()
+        d_loss.backward()
+        torch.nn.utils.clip_grad_norm_(list(disc.parameters()), grad_norm_clip)
+        d_optimizer.step()
+
+    g_loss = []
+    for batch in batches:
+        outs, tgts = model_fn(batch, model, self_exclude, ref_included, device)
+        g_loss.append(criterion(outs, tgts) + 0.05 * adversarial_loss(disc(outs)) if disc is not None else criterion(outs, tgts))
+
+    g_loss = sum(g_loss) / len(batches)
+
+    if g_optimizer is not None:
+        g_optimizer.zero_grad()
+        g_loss.backward()
+        torch.nn.utils.clip_grad_norm_(list(disc.parameters()), grad_norm_clip)
+        g_optimizer.step()
+
+
+    if d_scheduler is not None:
+        d_scheduler.step()
+    if g_scheduler is not None:
+        g_scheduler.step()
+
+    return g_loss
+
+
+def valid(dataloader, model, device, writer=None):
     """Validate on validation set."""
 
     model.eval()
@@ -86,11 +127,17 @@ def valid(dataloader, model, criterion, device):
 
     for i, batch in enumerate(dataloader):
         with torch.no_grad():
-            loss = model_fn(batch, model, criterion, 1.0, True, device)
-            running_loss += loss.item()
+            outs, tgts = model_fn(batch, model, 1.0, True, device)
+            running_loss += criterion(outs, tgts).item()
 
         pbar.update(dataloader.batch_size)
         pbar.set_postfix(loss=f"{running_loss / (i+1):.2f}")
+
+
+    if writer is not None:
+        for i, _ in zip(range(4), range(len(outs))):
+            writer.add_figure('ground_truth/spec_{}'.format(i), get_mel_plot(outs[i]), 1)
+            writer.add_figure('converted/spec_{}'.format(i), get_mel_plot(tgts[i]), 1)
 
     pbar.close()
     model.train()
@@ -117,6 +164,8 @@ def main(
     ckpt,
     grad_norm_clip,
     use_target_features,
+    adv,
+    d_ckpt,
     **kwargs,
 ):
     """Main function."""
@@ -129,7 +178,7 @@ def main(
     trainlen = int(0.9 * len(dataset))
     lengths = [trainlen, len(dataset) - trainlen]
     trainset, validset = random_split(dataset, lengths)
-    train_loader = DataLoader(
+    train_loader = infinite_iterator(DataLoader(
         trainset,
         batch_size=batch_size,
         shuffle=True,
@@ -137,7 +186,7 @@ def main(
         num_workers=n_workers,
         pin_memory=True,
         collate_fn=collate_batch,
-    )
+    ))
     valid_loader = DataLoader(
         validset,
         batch_size=batch_size * accu_steps,
@@ -146,7 +195,6 @@ def main(
         pin_memory=True,
         collate_fn=collate_batch,
     )
-    train_iterator = iter(train_loader)
 
     if comment is not None:
         log_dir = "logs/"
@@ -157,6 +205,19 @@ def main(
     save_dir_path = Path(save_dir)
     save_dir_path.mkdir(parents=True, exist_ok=True)
 
+    has_disc = adv or d_ckpt is not None
+    if has_disc:
+        if d_ckpt is None:
+            disc = Discriminator().to(device)
+            disc = torch.jit.script(disc)
+        else:
+            disc = torch.jit.load(d_ckpt).to(device)
+        d_optimizer = RAdam(disc.parameters(), lr=1e-4)
+        d_scheduler = torch.optim.lr_scheduler.ExponentialLR(d_optimizer, gamma=0.99997)
+    else:
+        d_optimizer = None
+        d_scheduler = None
+
     if ckpt is not None:
         try:
             start_step = int(ckpt.split('-')[1][4:])
@@ -166,15 +227,15 @@ def main(
             ref_included = False
 
         model = torch.jit.load(ckpt).to(device)
-        optimizer = RAdam([
-            {"params": model.unet.parameters(), "lr": 1e-6},
+        g_optimizer = RAdam([
+            {"params": model.unet.parameters(), "lr": 1e-4 if start_step < milestones[0] else 1e-6},
             {"params": model.smoothers.parameters()},
             {"params": model.mel_linear.parameters()},
             {"params": model.post_net.parameters()},
         ], lr=1e-4,
         )
-        scheduler = get_cosine_schedule_with_warmup(
-            optimizer, warmup_steps, total_steps - start_step
+        g_scheduler = get_cosine_schedule_with_warmup(
+            g_optimizer, warmup_steps, total_steps - start_step
         )
         print("Optimizer and scheduler restarted.")
         print(f"Model loaded from {ckpt}, iteration: {start_step}")
@@ -184,13 +245,9 @@ def main(
 
         model = FragmentVC().to(device)
         model = torch.jit.script(model)
-        optimizer = RAdam(model.parameters(), lr=1e-4)
-        scheduler = get_cosine_schedule_with_warmup(optimizer, warmup_steps, total_steps)
+        g_optimizer = RAdam(model.parameters(), lr=1e-4)
+        g_scheduler = get_cosine_schedule_with_warmup(g_optimizer, warmup_steps, total_steps)
 
-    criterion = nn.L1Loss()
-
-    best_loss = float("inf")
-    best_state_dict = None
 
     self_exclude = 0.0
 
@@ -199,22 +256,12 @@ def main(
     for step in range(start_step, total_steps):
         batch_loss = 0.0
 
-        for _ in range(accu_steps):
-            try:
-                batch = next(train_iterator)
-            except StopIteration:
-                train_iterator = iter(train_loader)
-                batch = next(train_iterator)
+        batches = [next(train_loader) for _ in range(accu_steps)]
 
-            loss = model_fn(batch, model, criterion, self_exclude, ref_included, device)
-            loss = loss / accu_steps
-            batch_loss += loss.item()
-            loss.backward()
-
-        optimizer.step()
-        scheduler.step()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_norm_clip)
-        optimizer.zero_grad()
+        batch_loss = training_step(
+            batches, model, g_optimizer, g_scheduler, disc, d_optimizer, d_scheduler,
+            device=device, grad_norm_clip=grad_norm_clip, self_exclude=self_exclude, ref_included=ref_included
+        ).item()
 
         pbar.update()
         pbar.set_postfix(loss=f"{batch_loss:.2f}", excl=self_exclude, step=step + 1)
@@ -226,42 +273,29 @@ def main(
         if (step + 1) % valid_steps == 0:
             pbar.close()
 
-            valid_loss = valid(valid_loader, model, criterion, device)
+            valid_loss = valid(valid_loader, model, device, writer=None if comment else writer)
 
             if comment is not None:
                 writer.add_scalar("Loss/valid", valid_loss, step + 1)
 
-            if valid_loss < best_loss:
-                best_loss = valid_loss
-                best_state_dict = model.state_dict()
-
             pbar = tqdm(total=valid_steps, ncols=0, desc="Train", unit=" step")
 
-        if (step + 1) % save_steps == 0 and best_state_dict is not None:
-            loss_str = f"{best_loss:.4f}".replace(".", "dot")
-            best_ckpt_name = f"retriever-best-loss{loss_str}.pt"
-
+        if (step + 1) % save_steps == 0:
             loss_str = f"{valid_loss:.4f}".replace(".", "dot")
             curr_ckpt_name = f"retriever-step{step+1}-loss{loss_str}.pt"
 
-            current_state_dict = model.state_dict()
             model.cpu()
-
-            model.load_state_dict(best_state_dict)
-            model.save(str(save_dir_path / best_ckpt_name))
-
-            model.load_state_dict(current_state_dict)
             model.save(str(save_dir_path / curr_ckpt_name))
-
             model.to(device)
-            pbar.write(f"Step {step + 1}, best model saved. (loss={best_loss:.4f})")
+
+            pbar.write(f"Step {step + 1} model saved. (loss={valid_loss:.4f})")
 
         if (step + 1) >= milestones[1]:
             self_exclude = exclusive_rate
 
         elif (step + 1) == milestones[0]:
             ref_included = True
-            optimizer = RAdam(
+            g_optimizer = RAdam(
                 [
                     {"params": model.unet.parameters(), "lr": 1e-6},
                     {"params": model.smoothers.parameters()},
@@ -270,8 +304,8 @@ def main(
                 ],
                 lr=1e-4,
             )
-            scheduler = get_cosine_schedule_with_warmup(
-                optimizer, warmup_steps, total_steps - milestones[0]
+            g_scheduler = get_cosine_schedule_with_warmup(
+                g_optimizer, warmup_steps, total_steps - milestones[0]
             )
             pbar.write("Optimizer and scheduler restarted.")
 

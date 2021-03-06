@@ -11,6 +11,15 @@ from scipy.signal import lfilter
 
 matplotlib.use("Agg")
 
+def infinite_iterator(iterable):
+    it = iter(iterable)
+    while True:
+        try:
+            ret = next(it)
+            yield ret
+        except StopIteration:
+            it = iter(iterable)
+
 
 def load_wav(
     audio_path: Union[str, Path], sample_rate: int, trim: bool = False
@@ -77,6 +86,16 @@ def plot_mel(gt_mel, predicted_mel=None, filename="mel.png"):
     plt.tight_layout()
     plt.savefig(filename)
     plt.close()
+
+def get_mel_plot(spectrogram):
+    fig, ax = plt.subplots(figsize=(10, 2))
+    im = ax.imshow(spectrogram, aspect="auto", origin="lower", interpolation='none')
+    plt.colorbar(im, ax=ax)
+
+    fig.canvas.draw()
+    plt.close()
+
+    return fig
 
 
 def plot_attn(attn, filename="attn.png"):

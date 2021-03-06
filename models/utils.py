@@ -10,6 +10,17 @@ from torch.optim.lr_scheduler import LambdaLR
 from transformers import Wav2Vec2Model
 
 
+def adversarial_loss(scores, as_real=True):
+  if as_real:
+    return torch.mean((1 - scores) ** 2)
+  return torch.mean(scores ** 2)
+
+
+def discriminator_loss(fake_scores, real_scores):
+  loss = adversarial_loss(fake_scores, as_real=False) + adversarial_loss(real_scores, as_real=True)
+  return loss
+
+
 def load_pretrained_wav2vec(ckpt_path):
     """Load pretrained Wav2Vec model."""
     # ckpt = torch.load(ckpt_path)

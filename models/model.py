@@ -156,3 +156,43 @@ class UnetBlock(nn.Module):
 
         # out: (tgt_len, batch, d_model)
         return out, [attn1, attn2, attn3]
+
+
+
+class Discriminator(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+        self.inputConvLayer = nn.Sequential(
+          nn.Conv2d(in_channels=1, out_channels=128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1)),
+          nn.SiLU()
+        )
+
+        # DownSample Layer
+        self.down1 = self.downSample(in_channels=128, out_channels=256, kernel_size=(3, 3), stride=(2, 2), padding=1)
+        self.down2 = self.downSample(in_channels=256, out_channels=512, kernel_size=(3, 3), stride=(2, 2), padding=1)
+        self.down3 = self.downSample(in_channels=512, out_channels=1024, kernel_size=(3, 3), stride=(2, 2), padding=1)
+        # self.down4 = self.downSample(in_channels=1024, out_channels=1024, kernel_size=(1, 5), stride=(1, 1), padding=(0, 2))
+
+        # Conv Layer
+        self.outputConvLayer = nn.Conv2d(in_channels=1024, out_channels=1, kernel_size=(1, 3), stride=(1, 1), padding=(0, 1))
+
+    def downSample(self, in_channels, out_channels, kernel_size, stride, padding):
+        return nn.Sequential(
+          nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size, stride=stride, padding=padding),
+          nn.InstanceNorm2d(num_features=out_channels, affine=True),
+          nn.SiLU()
+        )
+
+    def forward(self, input):
+        # input has shape (batch_size, num_features, time)
+        # discriminator requires shape (batchSize, 1, num_features, time)
+        x = self.inputConvLayer(input.unsqueeze(1))
+
+        x = self.down1(x)
+        x = self.down2(x)
+        x = self.down3(x)
+        # x = self.down4(x)
+
+        output = self.outputConvLayer(x)
+        return output
