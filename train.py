@@ -283,10 +283,15 @@ def main(
         if (step + 1) % save_steps == 0:
             loss_str = f"{valid_loss:.4f}".replace(".", "dot")
             curr_ckpt_name = f"retriever-step{step+1}-loss{loss_str}.pt"
+            curr_d_ckpt_name = f"d_retriever-step{step+1}-loss{loss_str}.pt"
 
             model.cpu()
             model.save(str(save_dir_path / curr_ckpt_name))
             model.to(device)
+
+            disc.cpu()
+            disc.save(str(save_dir_path / curr_d_ckpt_name))
+            disc.to(device)
 
             pbar.write(f"Step {step + 1} model saved. (loss={valid_loss:.4f})")
 
