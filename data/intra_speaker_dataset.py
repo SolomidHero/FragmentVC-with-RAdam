@@ -60,13 +60,13 @@ class IntraSpeakerDataset(Dataset):
 
     def _get_data(self, index):
         if self.pre_load:
-            speaker_name, content_emb, target_mel = self.data[index]
+            speaker_name, content_emb, target_mel, spk_emb = self.data[index]
         else:
-            speaker_name, content_emb, target_mel = _load_data(*self.data[index])
-        return speaker_name, content_emb, target_mel
+            speaker_name, content_emb, target_mel, spk_emb = _load_data(*self.data[index])
+        return speaker_name, content_emb, target_mel, spk_emb
 
     def __getitem__(self, index):
-        speaker_name, content_emb, target_mel = self._get_data(index)
+        speaker_name, content_emb, target_mel, spk_emb = self._get_data(index)
         utterance_indices = self.speaker_to_indices[speaker_name].copy()
         utterance_indices.remove(index)
 
@@ -81,9 +81,9 @@ class IntraSpeakerDataset(Dataset):
 
         if self.ref_feat:
             reference_feats = torch.cat(sampled_feats, dim=0)
-            return content_emb, (reference_mels, reference_feats), target_mel
+            return content_emb, (reference_mels, reference_feats), target_mel, spk_emb
 
-        return content_emb, reference_mels, target_mel
+        return content_emb, reference_mels, target_mel, spk_emb
 
 
 def _process_data(speaker_name, data_dir, feature_path, load):
@@ -97,13 +97,14 @@ def _load_data(speaker_name, data_dir, feature_path):
     feature = torch.load(Path(data_dir, feature_path))
     content_emb = feature["feat"]
     target_mel = feature["mel"]
+    spk_emb = feature["spk_emb"] if "spk_emb" in feature else None
 
-    return speaker_name, content_emb, target_mel
+    return speaker_name, content_emb, target_mel, spk_emb
 
 
 def collate_batch(batch):
     """Collate a batch of data."""
-    srcs, refs, tgts = zip(*batch)
+    srcs, refs, tgts, spk_embs = zip(*batch)
 
     if len(refs[0]) == 2:
         refs, refs_features = zip(*refs)
@@ -137,4 +138,6 @@ def collate_batch(batch):
     tgt_masks = [torch.arange(tgts.size(2)) >= tgt_len for tgt_len in tgt_lens]
     tgt_masks = torch.stack(tgt_masks)  # (batch, max_tgt_len)
 
-    return srcs, src_masks, (refs, refs_features), ref_masks, tgts, tgt_masks, overlap_lens
+    spk_embs = torch.stack(spk_embs) if all(emb is not None for emb in spk_embs) else None
+
+    return srcs, src_masks, (refs, refs_features), ref_masks, tgts, tgt_masks, spk_embs, overlap_lens

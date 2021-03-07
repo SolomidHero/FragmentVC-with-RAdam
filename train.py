@@ -17,12 +17,11 @@ from jsonargparse import ArgumentParser, ActionConfigFile
 
 from data import IntraSpeakerDataset, collate_batch, infinite_iterator, get_mel_plot
 from models import (
-    FragmentVC, Discriminator,
-    adversarial_loss, discriminator_loss, get_cosine_schedule_with_warmup
+    FragmentVC, Discriminator, load_pretrained_spk_emb,
+    adversarial_loss, discriminator_loss, mel_spec_loss, cosine_sim_loss,
+    get_cosine_schedule_with_warmup
 )
 
-
-criterion = nn.L1Loss()
 
 def parse_args():
     """Parse command-line arguments."""
@@ -47,14 +46,16 @@ def parse_args():
     parser.add_argument("--use_target_features", action='store_true')
     parser.add_argument("--adv", action="store_true")
     parser.add_argument("--d_ckpt", type=str, default=None)
+    parser.add_argument("--sim", action="store_true")
+    parser.add_argument("--sim_ckpt", type=str, default=None)
     parser.add_argument("--train_config", action=ActionConfigFile)
     return vars(parser.parse_args())
 
 
-def model_fn(batch, model, self_exclude, ref_included, device):
+def model_fn(batch, model, self_exclude, ref_included, device, cross=False):
     """Forward a batch through model."""
 
-    srcs, src_masks, (refs, refs_features), ref_masks, tgts, tgt_masks, overlap_lens = batch
+    srcs, src_masks, (refs, refs_features), ref_masks, tgts, tgt_masks, tgt_spk_embs, _ = batch
 
     srcs = srcs.to(device)
     src_masks = src_masks.to(device)
@@ -74,13 +75,16 @@ def model_fn(batch, model, self_exclude, ref_included, device):
         refs_features = srcs if refs_features is not None else refs_features
         ref_masks = tgt_masks
 
-    outs, _ = model(srcs, refs, refs_features=refs_features, src_masks=src_masks, ref_masks=ref_masks)
+    if cross:
+        outs, _ = model(torch.roll(srcs, 1, 0), refs, refs_features=refs_features, src_masks=torch.roll(src_masks, 1, 0), ref_masks=ref_masks)
+        return outs, tgts, tgt_spk_embs
 
+    outs, _ = model(srcs, refs, refs_features=refs_features, src_masks=src_masks, ref_masks=ref_masks)
     return outs, tgts
 
 
 def training_step(batches, model, g_optimizer, g_scheduler, disc=None, d_optimizer=None, d_scheduler=None,
-        device='cuda', grad_norm_clip=10, self_exclude=1.0, ref_included=True):
+        device='cuda', grad_norm_clip=10, self_exclude=1.0, ref_included=True, sim_model=None):
 
     if disc is not None:
         d_loss = []
@@ -99,9 +103,15 @@ def training_step(batches, model, g_optimizer, g_scheduler, disc=None, d_optimiz
     g_loss = []
     for batch in batches:
         outs, tgts = model_fn(batch, model, self_exclude, ref_included, device)
-        g_loss.append(criterion(outs, tgts) + 0.05 * adversarial_loss(disc(outs)) if disc is not None else criterion(outs, tgts))
-
+        g_loss.append(mel_spec_loss(outs, tgts) + 0.05 * adversarial_loss(disc(outs)) if disc is not None else mel_spec_loss(outs, tgts))
     g_loss = sum(g_loss) / len(batches)
+
+    if sim_model is not None:
+        sim_loss = []
+        for batch in batches:
+            outs, tgts, tgt_spk_embs = model_fn(batch, model, self_exclude, ref_included, device, cross=True)
+            sim_loss.append(0.05 * cosine_sim_loss(sim_model(outs), tgt_spk_embs))
+        g_loss += sum(sim_loss) / len(batches)
 
     if g_optimizer is not None:
         g_optimizer.zero_grad()
@@ -128,7 +138,7 @@ def valid(dataloader, model, device, writer=None):
     for i, batch in enumerate(dataloader):
         with torch.no_grad():
             outs, tgts = model_fn(batch, model, 1.0, True, device)
-            running_loss += criterion(outs, tgts).item()
+            running_loss += mel_spec_loss(outs, tgts).item()
 
         pbar.update(dataloader.batch_size)
         pbar.set_postfix(loss=f"{running_loss / (i+1):.2f}")
@@ -166,6 +176,8 @@ def main(
     use_target_features,
     adv,
     d_ckpt,
+    sim,
+    sim_ckpt,
     **kwargs,
 ):
     """Main function."""
@@ -218,6 +230,14 @@ def main(
         d_optimizer = None
         d_scheduler = None
 
+    has_sim = sim or sim_ckpt is not None
+    if has_sim:
+        if sim_ckpt is None:
+            sim = load_pretrained_spk_emb(train=True).to(device)
+            sim = torch.jit.script(sim)
+        else:
+            sim = torch.jit.load(sim_ckpt).to(device)
+
     if ckpt is not None:
         try:
             start_step = int(ckpt.split('-')[1][4:])
@@ -232,6 +252,7 @@ def main(
             {"params": model.smoothers.parameters()},
             {"params": model.mel_linear.parameters()},
             {"params": model.post_net.parameters()},
+            {"params": sim.parameters() if has_sim else []},
         ], lr=1e-4,
         )
         g_scheduler = get_cosine_schedule_with_warmup(
@@ -284,6 +305,7 @@ def main(
             loss_str = f"{valid_loss:.4f}".replace(".", "dot")
             curr_ckpt_name = f"retriever-step{step+1}-loss{loss_str}.pt"
             curr_d_ckpt_name = f"d_retriever-step{step+1}-loss{loss_str}.pt"
+            curr_sim_ckpt_name = f"sim_retriever-step{step+1}-loss{loss_str}.pt"
 
             model.cpu()
             model.save(str(save_dir_path / curr_ckpt_name))
@@ -292,6 +314,10 @@ def main(
             disc.cpu()
             disc.save(str(save_dir_path / curr_d_ckpt_name))
             disc.to(device)
+
+            sim.cpu()
+            sim.save(str(save_dir_path / curr_sim_ckpt_name))
+            sim.to(device)
 
             pbar.write(f"Step {step + 1} model saved. (loss={valid_loss:.4f})")
 

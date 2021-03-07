@@ -5,20 +5,32 @@ import math
 import torch
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LambdaLR
+import torch.nn.functional as F
 
 # from fairseq.models.wav2vec import Wav2Vec2Model
 from transformers import Wav2Vec2Model
 
+from pyannote.audio import Inference
 
 def adversarial_loss(scores, as_real=True):
-  if as_real:
-    return torch.mean((1 - scores) ** 2)
-  return torch.mean(scores ** 2)
+    if as_real:
+        return torch.mean((1 - scores) ** 2)
+    return torch.mean(scores ** 2)
 
 
 def discriminator_loss(fake_scores, real_scores):
-  loss = adversarial_loss(fake_scores, as_real=False) + adversarial_loss(real_scores, as_real=True)
-  return loss
+    loss = adversarial_loss(fake_scores, as_real=False) + adversarial_loss(real_scores, as_real=True)
+    return loss
+
+
+def mel_spec_loss(output, target, alpha=0.05):
+    if alpha == 0.:
+        return F.l1_loss(output, target)
+    return F.l1_loss(output, target) + alpha * F.mse_loss(output, target)
+
+
+def cosine_sim_loss(emb1, emb2):
+    return (1 - F.cosine_similarity(emb1, emb1)).mean()
 
 
 def load_pretrained_wav2vec(ckpt_path):
@@ -36,6 +48,18 @@ def load_pretrained_wav2vec(ckpt_path):
 
     Wav2Vec2Model.extract_features = extract_features # for same behaviour as fairseq.Wav2Vec2Model
     model = Wav2Vec2Model.from_pretrained(ckpt_path).eval()
+    return model
+
+
+def load_pretrained_spk_emb(train=False, device='cpu', n_mels=80):
+    """Load speaker embedding model"""
+    model = Inference('hbredin/SpeakerEmbedding-XVectorMFCC-VoxCeleb', device=device, window='sliding')
+
+    if train:
+        model = model.model
+        model.mfcc = torch.nn.Conv1d(n_mels, model.frame1.input_dim, 3, 2)
+        model = model.train().to(device)
+
     return model
 
 

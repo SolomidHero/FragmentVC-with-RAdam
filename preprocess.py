@@ -12,7 +12,7 @@ import torch
 from torch.utils.data import DataLoader
 from jsonargparse import ArgumentParser, ActionConfigFile
 
-from models import load_pretrained_wav2vec
+from models import load_pretrained_wav2vec, load_pretrained_spk_emb
 from data import PreprocessDataset
 
 
@@ -33,6 +33,7 @@ def parse_args():
     parser.add_argument("--n_mels", type=int, default=80)
     parser.add_argument("--f_min", type=int, default=80)
     parser.add_argument("--f_max", type=int, default=None)
+    parser.add_argument("--extract_spk_emb", action='store_true')
     parser.add_argument("--audio_config", action=ActionConfigFile)
 
     return vars(parser.parse_args())
@@ -52,6 +53,7 @@ def main(
     n_mels,
     f_min,
     f_max,
+    extract_spk_emb,
     **kwargs,
 ):
     """Main function."""
@@ -82,6 +84,7 @@ def main(
     )
 
     wav2vec = load_pretrained_wav2vec(wav2vec_path).to(device)
+    wav2emb = load_pretrained_spk_emb(train=False, device=device)
 
     speaker_infos = {}
 
@@ -100,10 +103,16 @@ def main(
             feat = feat.detach().cpu().squeeze(0)
             mel = mel.squeeze(0)
 
-            assert mel.shape == feat.shape
+            if extract_spk_emb:
+                spk_emb = wav2emb({
+                    'waveform': wav,
+                    'sample_rate': sample_rate,
+                }).data
+
+            assert len(mel) == len(feat)
 
         fd, temp_file = mkstemp(suffix=".tar", prefix="utterance-", dir=out_dir_path)
-        torch.save({"feat": feat, "mel": mel}, temp_file)
+        torch.save({"feat": feat, "mel": mel, "spk_emb": spk_emb}, temp_file)
         os.close(fd)
 
         if speaker_name not in speaker_infos.keys():
