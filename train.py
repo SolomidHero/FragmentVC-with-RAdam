@@ -83,35 +83,55 @@ def model_fn(batch, model, self_exclude, ref_included, device, cross=False):
     return outs, tgts
 
 
-def training_step(batches, model, g_optimizer, g_scheduler, disc=None, d_optimizer=None, d_scheduler=None,
-        device='cuda', grad_norm_clip=10, self_exclude=1.0, ref_included=True, sim_model=None):
+def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None, d_optimizer=None, d_scheduler=None, sim_model=None,
+        device='cuda', grad_norm_clip=10, self_exclude=1.0, ref_included=True):
 
+    # loss coefficients
+    adv_lambda = 0.05
+    sim_lambda = 0.1
+
+    # Discriminator losses
+    d_loss = torch.tensor(0., device=device)
     if disc is not None:
-        d_loss = []
         for batch in batches:
+            # identity
             with torch.no_grad():
                 outs, tgts = model_fn(batch, model, self_exclude, ref_included, device)
-            d_loss.append(0.05 * discriminator_loss(disc(outs), disc(tgts)))
+            d_loss += adv_lambda * discriminator_loss(disc(outs), disc(tgts))
 
-        d_loss = sum(d_loss) / len(batches)
+            # cross-conversion
+            with torch.no_grad():
+                outs, tgts, tgt_spk_embs = model_fn(batch, model, self_exclude, ref_included, device, cross=True)
+            d_loss += adv_lambda * discriminator_loss(disc(outs.detach()), disc(tgts))
+
+        d_loss /= len(batches)
 
         d_optimizer.zero_grad()
         d_loss.backward()
         torch.nn.utils.clip_grad_norm_(list(disc.parameters()), grad_norm_clip)
         d_optimizer.step()
 
-    g_loss = []
+    # Generator losses (with similarity from previous)
+    g_loss = torch.tensor(0., device=device)
+    g_adv_loss = torch.tensor(0., device=device)
+    sim_loss = torch.tensor(0., device=device)
     for batch in batches:
         outs, tgts = model_fn(batch, model, self_exclude, ref_included, device)
-        g_loss.append(mel_spec_loss(outs, tgts) + 0.05 * adversarial_loss(disc(outs)) if disc is not None else mel_spec_loss(outs, tgts))
-    g_loss = sum(g_loss) / len(batches)
+        g_loss += mel_spec_loss(outs, tgts)
+        if disc is not None:
+            g_adv_loss += adv_lambda * adversarial_loss(disc(outs))
 
-    if sim_model is not None:
-        sim_loss = []
-        for batch in batches:
+    for batch in batches:
+        if sim_model is not None or disc is not None:
             outs, tgts, tgt_spk_embs = model_fn(batch, model, self_exclude, ref_included, device, cross=True)
-            sim_loss.append(0.05 * cosine_sim_loss(sim_model(outs), tgt_spk_embs))
-        g_loss += sum(sim_loss) / len(batches)
+        if disc is not None:
+            g_adv_loss += adv_lambda * adversarial_loss(disc(outs))
+        if sim_model is not None:
+            sim_loss += sim_lambda * cosine_sim_loss(sim_model(outs), tgt_spk_embs)
+
+    sim_loss /= len(batches)
+    g_adv_loss /= len(batches)
+    g_loss = g_loss / len(batches) + g_adv_loss + sim_loss
 
     if g_optimizer is not None:
         g_optimizer.zero_grad()
@@ -125,7 +145,8 @@ def training_step(batches, model, g_optimizer, g_scheduler, disc=None, d_optimiz
     if g_scheduler is not None:
         g_scheduler.step()
 
-    return g_loss
+    return g_loss.item(), g_adv_loss.item(), sim_loss.item(), d_loss.item()
+
 
 
 def valid(dataloader, model, device, writer=None):
@@ -232,9 +253,9 @@ def main(
 
     has_sim = sim or sim_ckpt is not None
     if has_sim:
-        sim = load_pretrained_spk_emb(train=True).to(device)
+        sim_model = load_pretrained_spk_emb(train=True).to(device)
         if sim_ckpt is not None:
-            sim.load_state_dict(torch.load(sim_ckpt))
+            sim_model.load_state_dict(torch.load(sim_ckpt))
 
     if ckpt is not None:
         try:
@@ -250,7 +271,7 @@ def main(
             {"params": model.smoothers.parameters()},
             {"params": model.mel_linear.parameters()},
             {"params": model.post_net.parameters()},
-            {"params": sim.parameters() if has_sim else []},
+            {"params": sim_model.parameters() if has_sim else []},
         ], lr=1e-4,
         )
         g_scheduler = get_cosine_schedule_with_warmup(
@@ -277,16 +298,19 @@ def main(
 
         batches = [next(train_loader) for _ in range(accu_steps)]
 
-        batch_loss = training_step(
-            batches, model, g_optimizer, g_scheduler, disc, d_optimizer, d_scheduler,
+        batch_loss, g_adv_loss, sim_loss, d_loss = training_step(
+            batches, model, g_optimizer, g_scheduler, disc, d_optimizer, d_scheduler, sim_model=sim_model,
             device=device, grad_norm_clip=grad_norm_clip, self_exclude=self_exclude, ref_included=ref_included
-        ).item()
+        )
 
         pbar.update()
         pbar.set_postfix(loss=f"{batch_loss:.2f}", excl=self_exclude, step=step + 1)
 
         if step % log_steps == 0 and comment is not None:
             writer.add_scalar("Loss/train", batch_loss, step)
+            writer.add_scalar("Loss/g_adv", g_adv_loss, step)
+            writer.add_scalar("Loss/g_similarity", sim_loss, step)
+            writer.add_scalar("Loss/d_loss", d_loss, step)
             writer.add_scalar("Self-exclusive Rate", self_exclude, step)
 
         if (step + 1) % valid_steps == 0:
@@ -313,9 +337,9 @@ def main(
             disc.save(str(save_dir_path / curr_d_ckpt_name))
             disc.to(device)
 
-            sim.cpu()
-            torch.save(sim.state_dict(), str(save_dir_path / curr_sim_ckpt_name))
-            sim.to(device)
+            sim_model.cpu()
+            torch.save(sim_model.state_dict(), str(save_dir_path / curr_sim_ckpt_name))
+            sim_model.to(device)
 
             pbar.write(f"Step {step + 1} model saved. (loss={valid_loss:.4f})")
 

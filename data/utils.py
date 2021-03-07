@@ -89,7 +89,7 @@ def plot_mel(gt_mel, predicted_mel=None, filename="mel.png"):
 
 def get_mel_plot(spectrogram):
     fig, ax = plt.subplots(figsize=(10, 2))
-    im = ax.imshow(spectrogram, aspect="auto", origin="lower", interpolation='none')
+    im = ax.imshow(spectrogram.cpu().numpy(), aspect="auto", origin="lower", interpolation='none')
     plt.colorbar(im, ax=ax)
 
     fig.canvas.draw()
