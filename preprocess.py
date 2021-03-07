@@ -104,10 +104,11 @@ def main(
             mel = mel.squeeze(0)
 
             if extract_spk_emb:
-                spk_emb = wav2emb({
+                spk_emb = torch.from_numpy(wav2emb({
                     'waveform': wav,
                     'sample_rate': sample_rate,
-                }).data
+                }).data).mean(0)
+                assert len(spk_emb.shape) == 1
 
             assert len(mel) == len(feat)
 

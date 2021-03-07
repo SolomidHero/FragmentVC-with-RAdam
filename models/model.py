@@ -123,7 +123,7 @@ class UnetBlock(nn.Module):
 
         # tgt: (batch, tgt_len, d_model)
         tgt = self.prenet(srcs)
-        refs_features = None if refs_features is None else self.features_prenet(refs_features)
+        refs_features = None if refs_features is None else self.features_prenet(refs_features).transpose(0, 1)
 
         # tgt: (tgt_len, batch, d_model)
         tgt = tgt.transpose(0, 1)
@@ -137,7 +137,7 @@ class UnetBlock(nn.Module):
         out, attn1 = self.extractor1(
             tgt,
             ref3.transpose(1, 2).transpose(0, 1),
-            memory_features=refs_features.transpose(0, 1),
+            memory_features=refs_features,
             tgt_key_padding_mask=src_masks,
             memory_key_padding_mask=ref_masks,
         )

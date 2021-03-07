@@ -232,11 +232,9 @@ def main(
 
     has_sim = sim or sim_ckpt is not None
     if has_sim:
-        if sim_ckpt is None:
-            sim = load_pretrained_spk_emb(train=True).to(device)
-            sim = torch.jit.script(sim)
-        else:
-            sim = torch.jit.load(sim_ckpt).to(device)
+        sim = load_pretrained_spk_emb(train=True).to(device)
+        if sim_ckpt is not None:
+            sim.load_state_dict(torch.load(sim_ckpt))
 
     if ckpt is not None:
         try:
@@ -294,7 +292,7 @@ def main(
         if (step + 1) % valid_steps == 0:
             pbar.close()
 
-            valid_loss = valid(valid_loader, model, device, writer=None if comment else writer)
+            valid_loss = valid(valid_loader, model, device, writer=None if comment is None else writer)
 
             if comment is not None:
                 writer.add_scalar("Loss/valid", valid_loss, step + 1)
@@ -316,7 +314,7 @@ def main(
             disc.to(device)
 
             sim.cpu()
-            sim.save(str(save_dir_path / curr_sim_ckpt_name))
+            torch.save(sim.state_dict(), str(save_dir_path / curr_sim_ckpt_name))
             sim.to(device)
 
             pbar.write(f"Step {step + 1} model saved. (loss={valid_loss:.4f})")

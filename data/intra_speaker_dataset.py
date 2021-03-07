@@ -73,7 +73,7 @@ class IntraSpeakerDataset(Dataset):
         sampled_mels = []
         sampled_feats = []
         for sampled_id in random.sample(utterance_indices, self.n_samples):
-            _, sampled_feat, sampled_mel = self._get_data(sampled_id)
+            _, sampled_feat, sampled_mel, _ = self._get_data(sampled_id)
             sampled_mels.append(sampled_mel)
             sampled_feats.append(sampled_feat)
 
