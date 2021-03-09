@@ -21,7 +21,7 @@ class FragmentVC(nn.Module):
 
         self.unet = UnetBlock(d_model)
 
-        self.smoothers = nn.TransformerEncoder(Smoother(d_model, 2, 1024), num_layers=3)
+        self.smoothers = nn.TransformerEncoder(Smoother(d_model, 4, 1024), num_layers=3)
 
         self.mel_linear = nn.Linear(d_model, 80)
 
@@ -100,9 +100,9 @@ class UnetBlock(nn.Module):
             nn.Linear(768, 768), nn.ReLU(), nn.Linear(768, d_model),
         )
 
-        self.extractor1 = Extractor(d_model, 2, 1024, no_residual=True)
-        self.extractor2 = Extractor(d_model, 2, 1024)
-        self.extractor3 = Extractor(d_model, 2, 1024)
+        self.extractor1 = Extractor(d_model, 4, 1024, no_residual=True)
+        self.extractor2 = Extractor(d_model, 4, 1024)
+        self.extractor3 = Extractor(d_model, 4, 1024)
 
     def forward(
         self,
