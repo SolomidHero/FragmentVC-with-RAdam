@@ -2,6 +2,7 @@
 
 from typing import Tuple, List, Optional
 
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch import Tensor
@@ -160,6 +161,7 @@ class UnetBlock(nn.Module):
 
 
 class Discriminator(nn.Module):
+    """Score the realness of melspectrogram."""
     def __init__(self):
         super().__init__()
 
@@ -179,9 +181,9 @@ class Discriminator(nn.Module):
 
     def downSample(self, in_channels, out_channels, kernel_size, stride, padding):
         return nn.Sequential(
-          nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size, stride=stride, padding=padding),
-          nn.InstanceNorm2d(num_features=out_channels, affine=True),
-          nn.SiLU()
+            nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size, stride=stride, padding=padding),
+            nn.InstanceNorm2d(num_features=out_channels, affine=True),
+            nn.SiLU()
         )
 
     def forward(self, input):
@@ -195,4 +197,52 @@ class Discriminator(nn.Module):
         # x = self.down4(x)
 
         output = self.outputConvLayer(x)
+        return output
+
+
+
+class ConditionalDiscriminator(nn.Module):
+    """Score match of melspectrogram and embedding."""
+    def __init__(self, in_c=80, cond_dim=512):
+        super().__init__()
+
+        self.inputConvLayer = nn.Sequential(
+          nn.Conv1d(in_channels=in_c, out_channels=128, kernel_size=3, stride=1, padding=0),
+          nn.SiLU()
+        )
+
+        # DownSample Layer
+        self.down1 = self.convBlock(in_channels=128, out_channels=256, kernel_size=3, stride=2)
+        self.down2 = self.convBlock(in_channels=256, out_channels=512, kernel_size=5, stride=3)
+        self.down3 = self.convBlock(in_channels=512, out_channels=1024, kernel_size=11, stride=5)
+        # self.down4 = self.convBlock(in_channels=512, out_channels=512, kernel_size=3, stride=2)
+
+        # Conv Layer
+        self.out1 = self.convBlock(in_channels=1024, out_channels=1024 + cond_dim, kernel_size=1, stride=1)
+        self.out2 = nn.Conv1d(in_channels=1024 + cond_dim, out_channels=1, kernel_size=3, stride=1)
+
+    def convBlock(self, in_channels, out_channels, kernel_size, stride, padding, dilation=1):
+        return nn.Sequential(
+            nn.Conv1d(
+                in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size,
+                stride=stride, padding=padding, dilation=dilation
+            ),
+            nn.InstanceNorm1d(num_features=out_channels, affine=True),
+            nn.SiLU()
+        )
+
+    def forward(self, input, cond):
+        # input has shape (batch_size, num_features, time)
+        # cond  has shape (batch_size, emb_dim)
+        # discriminator requires shape (batchSize, num_features, time)
+        x = self.inputConvLayer(input.unsqueeze(1))
+
+        x = self.down1(x)
+        x = self.down2(x)
+        x = self.down3(x)
+
+        cond = torch.repeat_interleave(cond, x.shape[2], dim=1).reshape(*cond.shape[:2], x.shape[2])
+        x = torch.cat([x, cond], dim=2)
+        x = self.out1(x)
+        output = self.out2(x)
         return output

@@ -1,2 +1,2 @@
-from .model import FragmentVC, Discriminator
+from .model import FragmentVC, Discriminator, 
 from .utils import *

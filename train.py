@@ -18,7 +18,7 @@ from jsonargparse import ArgumentParser, ActionConfigFile
 
 from data import IntraSpeakerDataset, collate_batch, infinite_iterator, get_mel_plot
 from models import (
-    FragmentVC, Discriminator, load_pretrained_spk_emb,
+    FragmentVC, Discriminator, ConditionalDiscriminator, load_pretrained_spk_emb,
     adversarial_loss, discriminator_loss, mel_spec_loss, cosine_sim_loss,
     get_cosine_schedule_with_warmup
 )
@@ -78,18 +78,20 @@ def model_fn(batch, model, self_exclude, ref_included, device, cross=False):
 
     if cross:
         outs, _ = model(torch.roll(srcs, 1, 0), refs, refs_features=refs_features, src_masks=torch.roll(src_masks, 1, 0), ref_masks=ref_masks)
-        return outs, tgts, tgt_spk_embs
+    else:
+        outs, _ = model(srcs, refs, refs_features=refs_features, src_masks=src_masks, ref_masks=ref_masks)
+    return outs, tgts, tgt_spk_embs.to(device)
 
-    outs, _ = model(srcs, refs, refs_features=refs_features, src_masks=src_masks, ref_masks=ref_masks)
-    return outs, tgts
 
-
-def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None, d_optimizer=None, d_scheduler=None, sim_model=None,
-        device='cuda', grad_norm_clip=10, self_exclude=1.0, ref_included=True):
+def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None, d_optimizer=None, d_scheduler=None,
+        sim_model=None, sim_disc=None, device='cuda',
+        grad_norm_clip=10, self_exclude=1.0, ref_included=True
+    ):
 
     # loss coefficients
     adv_lambda = 0.05
-    sim_lambda = 0.05
+    cond_lambda = 0.03
+    sim_lambda = 0.03
 
     # Discriminator losses
     d_loss = torch.tensor(0., device=device)
@@ -97,13 +99,17 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
         for batch in batches:
             # identity
             with torch.no_grad():
-                outs, tgts = model_fn(batch, model, self_exclude, ref_included, device)
+                outs, tgts, tgt_spk_embs = model_fn(batch, model, self_exclude, ref_included, device)
             d_loss += adv_lambda * discriminator_loss(disc(outs), disc(tgts))
+            if sim_disc is not None:
+                d_cond_loss += cond_lambda * discriminator_loss(sim_disc(outs, tgt_spk_embs), sim_disc(tgts, tgt_spk_embs))
 
             # cross-conversion
             with torch.no_grad():
                 outs, tgts, tgt_spk_embs = model_fn(batch, model, self_exclude, ref_included, device, cross=True)
-            d_loss += adv_lambda * discriminator_loss(disc(outs.detach()), disc(tgts))
+            d_loss += adv_lambda * discriminator_loss(disc(outs), disc(tgts))
+            if sim_disc is not None:
+                d_cond_loss += cond_lambda * discriminator_loss(sim_disc(outs, tgt_spk_embs), sim_disc(tgts, tgt_spk_embs))
 
         d_loss /= len(batches)
 
@@ -118,12 +124,14 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
     sim_loss = torch.tensor(0., device=device)
     for batch in batches:
         # identity
-        outs, tgts = model_fn(batch, model, self_exclude, ref_included, device)
+        outs, tgts, tgt_spk_embs = model_fn(batch, model, self_exclude, ref_included, device)
         g_loss += mel_spec_loss(outs, tgts)
         if disc is not None:
             g_adv_loss += adv_lambda * adversarial_loss(disc(outs))
         if sim_model is not None:
-            sim_loss += sim_lambda * cosine_sim_loss(sim_model(outs), tgt_spk_embs.to(device))
+            sim_loss += sim_lambda * cosine_sim_loss(sim_model(outs), tgt_spk_embs)
+        if sim_disc is not None:
+            g_adv_loss += adv_lambda * adversarial_loss(sim_disc(outs, tgt_spk_embs))
 
         # cross-conversion
         if sim_model is not None or disc is not None:
@@ -131,7 +139,9 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
         if disc is not None:
             g_adv_loss += adv_lambda * adversarial_loss(disc(outs))
         if sim_model is not None:
-            sim_loss += sim_lambda * cosine_sim_loss(sim_model(outs), tgt_spk_embs.to(device))
+            sim_loss += sim_lambda * cosine_sim_loss(sim_model(outs), tgt_spk_embs)
+        if sim_disc is not None:
+            g_adv_loss += adv_lambda * adversarial_loss(sim_disc(outs, tgt_spk_embs))
 
     sim_loss /= len(batches)
     g_adv_loss /= len(batches)
@@ -161,7 +171,7 @@ def valid(dataloader, model, device, writer=None):
 
     for i, batch in enumerate(dataloader):
         with torch.no_grad():
-            outs, tgts = model_fn(batch, model, 1.0, True, device)
+            outs, tgts, tgt_spk_embs = model_fn(batch, model, 1.0, True, device)
             running_loss += mel_spec_loss(outs, tgts).item()
 
         pbar.update(dataloader.batch_size)
@@ -248,7 +258,14 @@ def main(
             disc = torch.jit.script(disc)
         else:
             disc = torch.jit.load(d_ckpt).to(device)
-        d_optimizer = RAdam(disc.parameters(), lr=1e-4)
+
+        if d_sim_ckpt is None:
+            sim_disc = ConditionalDiscriminator().to(device)
+            sim_disc = torch.jit.script(sim_disc)
+        else:
+            sim_disc = torch.jit.load(d_sim_ckpt).to(device)
+
+        d_optimizer = RAdam(chain(disc.parameters(), sim_disc.parameters()), lr=1e-4)
         d_scheduler = torch.optim.lr_scheduler.ExponentialLR(d_optimizer, gamma=0.99997)
     else:
         d_optimizer = None
@@ -302,7 +319,7 @@ def main(
         batches = [next(train_loader) for _ in range(accu_steps)]
 
         batch_loss, g_adv_loss, sim_loss, d_loss = training_step(
-            batches, model, g_optimizer, g_scheduler, disc, d_optimizer, d_scheduler, sim_model=sim_model,
+            batches, model, g_optimizer, g_scheduler, disc, d_optimizer, d_scheduler, sim_model=sim_model, sim_disc=sim_disc
             device=device, grad_norm_clip=grad_norm_clip, self_exclude=self_exclude, ref_included=ref_included
         )
 
@@ -330,6 +347,7 @@ def main(
             loss_str = f"{valid_loss:.4f}".replace(".", "dot")
             curr_ckpt_name = f"retriever-step{step+1}-loss{loss_str}.pt"
             curr_d_ckpt_name = f"d_retriever-step{step+1}-loss{loss_str}.pt"
+            curr_d_sim_ckpt_name = f"dsim_retriever-step{step+1}-loss{loss_str}.pt"
             curr_sim_ckpt_name = f"sim_retriever-step{step+1}-loss{loss_str}.pt"
 
             model.cpu()
@@ -339,6 +357,10 @@ def main(
             disc.cpu()
             disc.save(str(save_dir_path / curr_d_ckpt_name))
             disc.to(device)
+
+            sim_disc.cpu()
+            sim_disc.save(str(save_dir_path / curr_d_sim_ckpt_name))
+            sim_disc.to(device)
 
             sim_model.cpu()
             torch.save(sim_model.state_dict(), str(save_dir_path / curr_sim_ckpt_name))
