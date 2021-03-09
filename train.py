@@ -5,6 +5,7 @@
 import datetime
 import random
 from pathlib import Path
+from itertools import chain
 
 import torch
 import torch.nn as nn
@@ -88,7 +89,7 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
 
     # loss coefficients
     adv_lambda = 0.05
-    sim_lambda = 0.1
+    sim_lambda = 0.05
 
     # Discriminator losses
     d_loss = torch.tensor(0., device=device)
@@ -111,23 +112,26 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
         torch.nn.utils.clip_grad_norm_(list(disc.parameters()), grad_norm_clip)
         d_optimizer.step()
 
-    # Generator losses (with similarity from previous)
+    # Generator losses
     g_loss = torch.tensor(0., device=device)
     g_adv_loss = torch.tensor(0., device=device)
     sim_loss = torch.tensor(0., device=device)
     for batch in batches:
+        # identity
         outs, tgts = model_fn(batch, model, self_exclude, ref_included, device)
         g_loss += mel_spec_loss(outs, tgts)
         if disc is not None:
             g_adv_loss += adv_lambda * adversarial_loss(disc(outs))
+        if sim_model is not None:
+            sim_loss += sim_lambda * cosine_sim_loss(sim_model(outs), tgt_spk_embs.to(device))
 
-    for batch in batches:
+        # cross-conversion
         if sim_model is not None or disc is not None:
             outs, tgts, tgt_spk_embs = model_fn(batch, model, self_exclude, ref_included, device, cross=True)
         if disc is not None:
             g_adv_loss += adv_lambda * adversarial_loss(disc(outs))
         if sim_model is not None:
-            sim_loss += sim_lambda * cosine_sim_loss(sim_model(outs), tgt_spk_embs)
+            sim_loss += sim_lambda * cosine_sim_loss(sim_model(outs), tgt_spk_embs.to(device))
 
     sim_loss /= len(batches)
     g_adv_loss /= len(batches)
@@ -136,7 +140,7 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
     if g_optimizer is not None:
         g_optimizer.zero_grad()
         g_loss.backward()
-        torch.nn.utils.clip_grad_norm_(list(disc.parameters()), grad_norm_clip)
+        torch.nn.utils.clip_grad_norm_(list(model.parameters()), grad_norm_clip)
         g_optimizer.step()
 
 
@@ -146,7 +150,6 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
         g_scheduler.step()
 
     return g_loss.item(), g_adv_loss.item(), sim_loss.item(), d_loss.item()
-
 
 
 def valid(dataloader, model, device, writer=None):
@@ -285,7 +288,7 @@ def main(
 
         model = FragmentVC().to(device)
         model = torch.jit.script(model)
-        g_optimizer = RAdam(model.parameters(), lr=1e-4)
+        g_optimizer = RAdam(chain(model.parameters(), sim_model.parameters()), lr=1e-4)
         g_scheduler = get_cosine_schedule_with_warmup(g_optimizer, warmup_steps, total_steps)
 
 
@@ -354,6 +357,7 @@ def main(
                     {"params": model.smoothers.parameters()},
                     {"params": model.mel_linear.parameters()},
                     {"params": model.post_net.parameters()},
+                    {"params": sim_model.parameters() if has_sim else []},
                 ],
                 lr=1e-4,
             )

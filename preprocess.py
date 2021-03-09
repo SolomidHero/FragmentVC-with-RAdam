@@ -108,6 +108,7 @@ def main(
                     'waveform': wav,
                     'sample_rate': sample_rate,
                 }).data).mean(0)
+                spk_emb = spk_emb / (spk_emb ** 2).sum(-1, keepdims=True) ** 0.5 # norm embeddings
                 assert len(spk_emb.shape) == 1
 
             assert len(mel) == len(feat)

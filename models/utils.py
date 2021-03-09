@@ -11,6 +11,7 @@ import torch.nn.functional as F
 from transformers import Wav2Vec2Model
 
 from pyannote.audio import Inference
+from pyannote.audio.models.embedding import XVector
 
 def adversarial_loss(scores, as_real=True):
     if as_real:
@@ -30,7 +31,7 @@ def mel_spec_loss(output, target, alpha=0.05):
 
 
 def cosine_sim_loss(emb1, emb2):
-    return (1 - F.cosine_similarity(emb1, emb1)).mean()
+    return (1. - F.cosine_similarity(emb1, emb2)).mean()
 
 
 def load_pretrained_wav2vec(ckpt_path):
@@ -56,8 +57,8 @@ def load_pretrained_spk_emb(train=False, device='cpu', n_mels=80):
     model = Inference('hbredin/SpeakerEmbedding-XVectorMFCC-VoxCeleb', device=device, window='sliding')
 
     if train:
-        model = model.model
-        model.mfcc = torch.nn.Conv1d(n_mels, model.frame1.input_dim, 3, 2)
+        model = XVector()
+        model.sincnet = torch.nn.Conv1d(n_mels, model.frame1.input_dim, 3, 2)
         model = model.train().to(device)
 
     return model
