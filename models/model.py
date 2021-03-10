@@ -212,14 +212,14 @@ class ConditionalDiscriminator(nn.Module):
         )
 
         # DownSample Layer
-        self.down1 = self.convBlock(in_channels=128, out_channels=256, kernel_size=3, stride=2)
-        self.down2 = self.convBlock(in_channels=256, out_channels=512, kernel_size=5, stride=3)
-        self.down3 = self.convBlock(in_channels=512, out_channels=1024, kernel_size=11, stride=5)
+        self.down1 = self.convBlock(in_channels=128, out_channels=256, kernel_size=3, stride=2, padding=1)
+        self.down2 = self.convBlock(in_channels=256, out_channels=512, kernel_size=5, stride=3, padding=2)
+        self.down3 = self.convBlock(in_channels=512, out_channels=1024, kernel_size=11, stride=5, padding=5)
         # self.down4 = self.convBlock(in_channels=512, out_channels=512, kernel_size=3, stride=2)
 
         # Conv Layer
-        self.out1 = self.convBlock(in_channels=1024, out_channels=1024 + cond_dim, kernel_size=1, stride=1)
-        self.out2 = nn.Conv1d(in_channels=1024 + cond_dim, out_channels=1, kernel_size=3, stride=1)
+        self.out1 = self.convBlock(in_channels=1024 + cond_dim, out_channels=1024, kernel_size=1, stride=1, padding=0)
+        self.out2 = nn.Conv1d(in_channels=1024, out_channels=1, kernel_size=3, stride=1, padding=1)
 
     def convBlock(self, in_channels, out_channels, kernel_size, stride, padding, dilation=1):
         return nn.Sequential(
@@ -235,13 +235,13 @@ class ConditionalDiscriminator(nn.Module):
         # input has shape (batch_size, num_features, time)
         # cond  has shape (batch_size, emb_dim)
         # discriminator requires shape (batchSize, num_features, time)
-        x = self.inputConvLayer(input.unsqueeze(1))
+        x = self.inputConvLayer(input)
 
         x = self.down1(x)
         x = self.down2(x)
         x = self.down3(x)
 
-        cond = torch.repeat_interleave(cond, x.shape[2], dim=1).reshape(*cond.shape[:2], x.shape[2])
+        cond = torch.repeat_interleave(cond, x.shape[2], dim=1).reshape(cond.shape[0], cond.shape[1], x.shape[2])
         x = torch.cat([x, cond], dim=2)
         x = self.out1(x)
         output = self.out2(x)

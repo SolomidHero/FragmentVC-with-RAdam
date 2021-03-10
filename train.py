@@ -49,6 +49,7 @@ def parse_args():
     parser.add_argument("--d_ckpt", type=str, default=None)
     parser.add_argument("--sim", action="store_true")
     parser.add_argument("--sim_ckpt", type=str, default=None)
+    parser.add_argument("--d_sim_ckpt", type=str, default=None)
     parser.add_argument("--train_config", action=ActionConfigFile)
     return vars(parser.parse_args())
 
@@ -102,20 +103,22 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
                 outs, tgts, tgt_spk_embs = model_fn(batch, model, self_exclude, ref_included, device)
             d_loss += adv_lambda * discriminator_loss(disc(outs), disc(tgts))
             if sim_disc is not None:
-                d_cond_loss += cond_lambda * discriminator_loss(sim_disc(outs, tgt_spk_embs), sim_disc(tgts, tgt_spk_embs))
+                d_loss += cond_lambda * discriminator_loss(sim_disc(outs, tgt_spk_embs), sim_disc(tgts, tgt_spk_embs))
 
             # cross-conversion
             with torch.no_grad():
                 outs, tgts, tgt_spk_embs = model_fn(batch, model, self_exclude, ref_included, device, cross=True)
             d_loss += adv_lambda * discriminator_loss(disc(outs), disc(tgts))
             if sim_disc is not None:
-                d_cond_loss += cond_lambda * discriminator_loss(sim_disc(outs, tgt_spk_embs), sim_disc(tgts, tgt_spk_embs))
+                d_loss += cond_lambda * discriminator_loss(sim_disc(outs, tgt_spk_embs), sim_disc(tgts, tgt_spk_embs))
 
         d_loss /= len(batches)
 
         d_optimizer.zero_grad()
         d_loss.backward()
-        torch.nn.utils.clip_grad_norm_(list(disc.parameters()), grad_norm_clip)
+        torch.nn.utils.clip_grad_norm_(disc.parameters(), grad_norm_clip)
+        if sim_disc is not None:
+            torch.nn.utils.clip_grad_norm_(sim_disc.parameters(), grad_norm_clip)
         d_optimizer.step()
 
     # Generator losses
@@ -131,7 +134,7 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
         if sim_model is not None:
             sim_loss += sim_lambda * cosine_sim_loss(sim_model(outs), tgt_spk_embs)
         if sim_disc is not None:
-            g_adv_loss += adv_lambda * adversarial_loss(sim_disc(outs, tgt_spk_embs))
+            g_adv_loss += cond_lambda * adversarial_loss(sim_disc(outs, tgt_spk_embs))
 
         # cross-conversion
         if sim_model is not None or disc is not None:
@@ -141,7 +144,7 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
         if sim_model is not None:
             sim_loss += sim_lambda * cosine_sim_loss(sim_model(outs), tgt_spk_embs)
         if sim_disc is not None:
-            g_adv_loss += adv_lambda * adversarial_loss(sim_disc(outs, tgt_spk_embs))
+            g_adv_loss += cond_lambda * adversarial_loss(sim_disc(outs, tgt_spk_embs))
 
     sim_loss /= len(batches)
     g_adv_loss /= len(batches)
@@ -150,7 +153,7 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
     if g_optimizer is not None:
         g_optimizer.zero_grad()
         g_loss.backward()
-        torch.nn.utils.clip_grad_norm_(list(model.parameters()), grad_norm_clip)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_norm_clip)
         g_optimizer.step()
 
 
@@ -212,6 +215,7 @@ def main(
     d_ckpt,
     sim,
     sim_ckpt,
+    d_sim_ckpt,
     **kwargs,
 ):
     """Main function."""
@@ -319,7 +323,7 @@ def main(
         batches = [next(train_loader) for _ in range(accu_steps)]
 
         batch_loss, g_adv_loss, sim_loss, d_loss = training_step(
-            batches, model, g_optimizer, g_scheduler, disc, d_optimizer, d_scheduler, sim_model=sim_model, sim_disc=sim_disc
+            batches, model, g_optimizer, g_scheduler, disc, d_optimizer, d_scheduler, sim_model=sim_model, sim_disc=sim_disc,
             device=device, grad_norm_clip=grad_norm_clip, self_exclude=self_exclude, ref_included=ref_included
         )
 
