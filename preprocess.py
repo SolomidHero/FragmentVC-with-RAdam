@@ -98,6 +98,7 @@ def main(
         speaker_name = speaker_name[0]
         audio_path = audio_path[0]
 
+        spk_emb = None
         with torch.no_grad():
             feat = wav2vec.extract_features(wav, None)[0]
             feat = feat.detach().cpu().squeeze(0)

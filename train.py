@@ -66,6 +66,7 @@ def model_fn(batch, model, self_exclude, ref_included, device, cross=False):
     ref_masks = ref_masks.to(device)
     tgts = tgts.to(device)
     tgt_masks = tgt_masks.to(device)
+    tgt_spk_embs = None if tgt_spk_embs is None else tgt_spk_embs.to(device)
 
     if ref_included:
         if random.random() >= self_exclude:
@@ -81,7 +82,7 @@ def model_fn(batch, model, self_exclude, ref_included, device, cross=False):
         outs, _ = model(torch.roll(srcs, 1, 0), refs, refs_features=refs_features, src_masks=torch.roll(src_masks, 1, 0), ref_masks=ref_masks)
     else:
         outs, _ = model(srcs, refs, refs_features=refs_features, src_masks=src_masks, ref_masks=ref_masks)
-    return outs, tgts, tgt_spk_embs.to(device)
+    return outs, tgts, tgt_spk_embs
 
 
 def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None, d_optimizer=None, d_scheduler=None,
@@ -174,7 +175,7 @@ def valid(dataloader, model, device, writer=None):
 
     for i, batch in enumerate(dataloader):
         with torch.no_grad():
-            outs, tgts, tgt_spk_embs = model_fn(batch, model, 1.0, True, device)
+            outs, tgts, _ = model_fn(batch, model, 1.0, True, device)
             running_loss += mel_spec_loss(outs, tgts).item()
 
         pbar.update(dataloader.batch_size)
@@ -256,6 +257,11 @@ def main(
     save_dir_path.mkdir(parents=True, exist_ok=True)
 
     has_disc = adv or d_ckpt is not None
+    disc = None
+    sim_disc = None
+    sim_model = None
+    d_optimizer = None
+    d_scheduler = None
     if has_disc:
         if d_ckpt is None:
             disc = Discriminator().to(device)
@@ -269,11 +275,8 @@ def main(
         else:
             sim_disc = torch.jit.load(d_sim_ckpt).to(device)
 
-        d_optimizer = RAdam(chain(disc.parameters(), sim_disc.parameters()), lr=1e-4)
+        d_optimizer = RAdam(chain(disc.parameters(), [] if sim_disc is None else sim_disc.parameters()), lr=1e-4)
         d_scheduler = torch.optim.lr_scheduler.ExponentialLR(d_optimizer, gamma=0.99997)
-    else:
-        d_optimizer = None
-        d_scheduler = None
 
     has_sim = sim or sim_ckpt is not None
     if has_sim:
@@ -358,17 +361,20 @@ def main(
             model.save(str(save_dir_path / curr_ckpt_name))
             model.to(device)
 
-            disc.cpu()
-            disc.save(str(save_dir_path / curr_d_ckpt_name))
-            disc.to(device)
+            if disc is not None:
+                disc.cpu()
+                disc.save(str(save_dir_path / curr_d_ckpt_name))
+                disc.to(device)
 
-            sim_disc.cpu()
-            sim_disc.save(str(save_dir_path / curr_d_sim_ckpt_name))
-            sim_disc.to(device)
+            if sim_disc is not None:
+                sim_disc.cpu()
+                sim_disc.save(str(save_dir_path / curr_d_sim_ckpt_name))
+                sim_disc.to(device)
 
-            sim_model.cpu()
-            torch.save(sim_model.state_dict(), str(save_dir_path / curr_sim_ckpt_name))
-            sim_model.to(device)
+            if has_sim:
+                sim_model.cpu()
+                torch.save(sim_model.state_dict(), str(save_dir_path / curr_sim_ckpt_name))
+                sim_model.to(device)
 
             pbar.write(f"Step {step + 1} model saved. (loss={valid_loss:.4f})")
 
