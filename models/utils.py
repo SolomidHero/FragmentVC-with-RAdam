@@ -24,10 +24,22 @@ def discriminator_loss(fake_scores, real_scores):
     return loss
 
 
-def mel_spec_loss(output, target, alpha=0.05):
+def l1_loss(output, target, mask):
+    return torch.masked_select(output - target, mask).abs().mean()
+
+
+def mse_loss(output, target, mask):
+    return (torch.masked_select(output - target, mask) ** 2).mean() ** 0.5
+
+
+def mel_spec_loss(output, target, mask=None, alpha=0.05):
+    if mask is None:
+        mask = torch.full((output.shape[0], output.shape[2]), True)
+    mask = mask.unsqueeze(1)
+
     if alpha == 0.:
-        return F.l1_loss(output, target)
-    return F.l1_loss(output, target) + alpha * F.mse_loss(output, target)
+        return l1_loss(output, target, mask)
+    return l1_loss(output, target, mask) + alpha * mse_loss(output, target, mask)
 
 
 def cosine_sim_loss(emb1, emb2):

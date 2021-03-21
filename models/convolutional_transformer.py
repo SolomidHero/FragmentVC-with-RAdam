@@ -59,7 +59,7 @@ class Extractor(Module):
         self.self_attn = MultiheadAttention(d_model, nhead, dropout=dropout)
         self.cross_attn = MultiheadAttention(d_model, nhead, dropout=dropout)
 
-        self.conv1 = Conv1d(d_model, d_hid, 9, padding=4)
+        self.conv1 = Conv1d(d_model, d_hid, 3, padding=1)
         self.conv2 = Conv1d(d_hid, d_model, 1, padding=0)
 
         self.norm1 = LayerNorm(d_model)

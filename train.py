@@ -54,6 +54,30 @@ def parse_args():
     return vars(parser.parse_args())
 
 
+def disc_fn(disc, batch, mask):
+    scores = torch.cat([
+        torch.flatten(disc(torch.masked_select(item, item_mask).reshape(1, item.shape[0], -1)))
+        for item, item_mask in zip(batch, mask)
+    ])
+    return scores
+
+def sim_fn(sim_model, batch, mask):
+    scores = torch.cat([
+        sim_model(torch.masked_select(item, item_mask).reshape(1, item.shape[0], -1))
+        for item, item_mask in zip(batch, mask)
+    ])
+    return scores
+
+def sim_disc_fn(sim_disc, batch, conds, mask):
+    scores = torch.cat([
+        torch.flatten(sim_disc(
+            torch.masked_select(item, item_mask).reshape(1, item.shape[0], -1),
+            cond.unsqueeze(0),
+        ))
+        for item, cond, item_mask in zip(batch, conds, mask)
+    ])
+    return scores
+
 def model_fn(batch, model, self_exclude, ref_included, device, cross=False):
     """Forward a batch through model."""
 
@@ -79,10 +103,10 @@ def model_fn(batch, model, self_exclude, ref_included, device, cross=False):
         ref_masks = tgt_masks
 
     if cross:
-        outs, _ = model(torch.roll(srcs, 1, 0), refs, refs_features=refs_features, src_masks=torch.roll(src_masks, 1, 0), ref_masks=ref_masks)
-    else:
-        outs, _ = model(srcs, refs, refs_features=refs_features, src_masks=src_masks, ref_masks=ref_masks)
-    return outs, tgts, tgt_spk_embs
+        srcs = torch.roll(srcs, 1, 0)
+        src_masks = torch.roll(src_masks, 1, 0)
+    outs, _ = model(srcs, refs, refs_features=refs_features, src_masks=src_masks, ref_masks=ref_masks)
+    return outs, tgts, tgt_spk_embs, ~src_masks
 
 
 def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None, d_optimizer=None, d_scheduler=None,
@@ -92,8 +116,8 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
 
     # loss coefficients
     adv_lambda = 0.05
-    cond_lambda = 0.03
-    sim_lambda = 0.03
+    cond_lambda = 0.025
+    # sim_lambda = 0.025
 
     # Discriminator losses
     d_loss = torch.tensor(0., device=device)
@@ -101,17 +125,19 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
         for batch in batches:
             # identity
             with torch.no_grad():
-                outs, tgts, tgt_spk_embs = model_fn(batch, model, self_exclude, ref_included, device)
-            d_loss += adv_lambda * discriminator_loss(disc(outs), disc(tgts))
+                outs, tgts, tgt_spk_embs, mask = model_fn(batch, model, self_exclude, ref_included, device)
+            fake_scores, real_scores = disc_fn(disc, outs, mask), disc_fn(disc, tgts, mask)
+            d_loss += adv_lambda * discriminator_loss(fake_scores, real_scores)
             if sim_disc is not None:
-                d_loss += cond_lambda * discriminator_loss(sim_disc(outs, tgt_spk_embs), sim_disc(tgts, tgt_spk_embs))
+                d_loss += cond_lambda * discriminator_loss(sim_disc_fn(sim_disc, outs, tgt_spk_embs, mask), sim_disc_fn(sim_disc, tgts, tgt_spk_embs, mask))
 
             # cross-conversion
             with torch.no_grad():
-                outs, tgts, tgt_spk_embs = model_fn(batch, model, self_exclude, ref_included, device, cross=True)
-            d_loss += adv_lambda * discriminator_loss(disc(outs), disc(tgts))
+                outs, tgts, tgt_spk_embs, mask = model_fn(batch, model, self_exclude, ref_included, device, cross=True)
+            fake_scores, real_scores = disc_fn(disc, outs, mask), disc_fn(disc, tgts, mask)
+            d_loss += adv_lambda * discriminator_loss(fake_scores, real_scores)
             if sim_disc is not None:
-                d_loss += cond_lambda * discriminator_loss(sim_disc(outs, tgt_spk_embs), sim_disc(tgts, tgt_spk_embs))
+                d_loss += cond_lambda * discriminator_loss(sim_disc_fn(sim_disc, outs, tgt_spk_embs, mask), sim_disc_fn(sim_disc, tgts, tgt_spk_embs, mask))
 
         d_loss /= len(batches)
 
@@ -128,24 +154,24 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
     sim_loss = torch.tensor(0., device=device)
     for batch in batches:
         # identity
-        outs, tgts, tgt_spk_embs = model_fn(batch, model, self_exclude, ref_included, device)
-        g_loss += mel_spec_loss(outs, tgts)
+        outs, tgts, tgt_spk_embs, mask = model_fn(batch, model, self_exclude, ref_included, device)
+        g_loss += mel_spec_loss(outs, tgts, mask=mask)
         if disc is not None:
-            g_adv_loss += adv_lambda * adversarial_loss(disc(outs))
+            g_adv_loss += adv_lambda * adversarial_loss(disc_fn(disc, outs, mask))
         if sim_model is not None:
-            sim_loss += sim_lambda * cosine_sim_loss(sim_model(outs), tgt_spk_embs)
+            sim_loss += sim_lambda * cosine_sim_loss(sim_fn(sim_model, outs, mask), tgt_spk_embs)
         if sim_disc is not None:
-            g_adv_loss += cond_lambda * adversarial_loss(sim_disc(outs, tgt_spk_embs))
+            g_adv_loss += cond_lambda * adversarial_loss(sim_disc_fn(sim_disc, outs, tgt_spk_embs, mask))
 
         # cross-conversion
         if sim_model is not None or disc is not None:
-            outs, tgts, tgt_spk_embs = model_fn(batch, model, self_exclude, ref_included, device, cross=True)
+            outs, tgts, tgt_spk_embs, mask = model_fn(batch, model, self_exclude, ref_included, device, cross=True)
         if disc is not None:
-            g_adv_loss += adv_lambda * adversarial_loss(disc(outs))
+            g_adv_loss += adv_lambda * adversarial_loss(disc_fn(disc, outs, mask))
         if sim_model is not None:
-            sim_loss += sim_lambda * cosine_sim_loss(sim_model(outs), tgt_spk_embs)
+            sim_loss += sim_lambda * cosine_sim_loss(sim_fn(sim_model, outs, mask), tgt_spk_embs)
         if sim_disc is not None:
-            g_adv_loss += cond_lambda * adversarial_loss(sim_disc(outs, tgt_spk_embs))
+            g_adv_loss += cond_lambda * adversarial_loss(sim_disc_fn(sim_disc, outs, tgt_spk_embs, mask))
 
     sim_loss /= len(batches)
     g_adv_loss /= len(batches)
@@ -155,6 +181,8 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
         g_optimizer.zero_grad()
         g_loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), grad_norm_clip)
+        if sim_model is not None:
+            torch.nn.utils.clip_grad_norm_(sim_model.parameters(), grad_norm_clip)
         g_optimizer.step()
 
 
