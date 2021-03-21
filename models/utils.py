@@ -10,8 +10,10 @@ import torch.nn.functional as F
 # from fairseq.models.wav2vec import Wav2Vec2Model
 from transformers import Wav2Vec2Model
 
-from pyannote.audio import Inference
-from pyannote.audio.models.embedding import XVector
+# from pyannote.audio import Inference
+# from pyannote.audio.models.embedding import XVector
+from resemblyzer import VoiceEncoder
+
 
 def adversarial_loss(scores, as_real=True):
     if as_real:
@@ -66,13 +68,13 @@ def load_pretrained_wav2vec(ckpt_path):
 
 def load_pretrained_spk_emb(train=False, device='cpu', n_mels=80):
     """Load speaker embedding model"""
-    model = Inference('hbredin/SpeakerEmbedding-XVectorMFCC-VoxCeleb', device=device, window='sliding')
+    # model = Inference('hbredin/SpeakerEmbedding-XVectorMFCC-VoxCeleb', device=device, window='sliding')from resemblyzer import VoiceEncoder, preprocess_wav
+    # if train:
+    #     model = XVector()
+    #     model.sincnet = torch.nn.Conv1d(n_mels, model.frame1.input_dim, 3, 2)
+    #     model = model.train().to(device)
 
-    if train:
-        model = XVector()
-        model.sincnet = torch.nn.Conv1d(n_mels, model.frame1.input_dim, 3, 2)
-        model = model.train().to(device)
-
+    model = VoiceEncoder()
     return model
 
 

@@ -9,12 +9,12 @@ from multiprocessing import cpu_count
 
 import tqdm
 import torch
+from resemblyzer import preprocess_wav
 from torch.utils.data import DataLoader
 from jsonargparse import ArgumentParser, ActionConfigFile
 
 from models import load_pretrained_wav2vec, load_pretrained_spk_emb
 from data import PreprocessDataset
-
 
 def parse_args():
     """Parse command-line arguments."""
@@ -105,11 +105,13 @@ def main(
 
             spk_emb = None
             if extract_spk_emb:
-                spk_emb = torch.from_numpy(wav2emb({
-                    'waveform': wav,
-                    'sample_rate': sample_rate,
-                }).data).mean(0)
-                spk_emb = spk_emb / (spk_emb ** 2).sum(-1, keepdims=True) ** 0.5 # norm embeddings
+                # spk_emb = torch.from_numpy(wav2emb({
+                #     'waveform': wav,
+                #     'sample_rate': sample_rate,
+                # }).data).mean(0)
+                # spk_emb = spk_emb / (spk_emb ** 2).sum(-1, keepdims=True) ** 0.5 # norm embeddings
+
+                spk_emb = wav2emb.embed_utterance(preprocess_wav(wav, sample_rate))
                 assert len(spk_emb.shape) == 1
 
             assert len(mel) == len(feat)
