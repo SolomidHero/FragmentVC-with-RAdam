@@ -9,6 +9,7 @@ from torch.multiprocessing import Pool, cpu_count
 import yaml
 import torch
 import numpy as np
+from resemblyzer import preprocess_wav
 import soundfile as sf
 from jsonargparse import ArgumentParser, ActionConfigFile
 
@@ -37,6 +38,7 @@ def parse_args():
     parser.add_argument("--trim", action='store_true')
     parser.add_argument("--plot", action='store_true')
     parser.add_argument("--use_target_features", action='store_true')
+    parser.add_argument("--use_embed_in_src", action='store_true')
     parser.add_argument("--audio_config", action=ActionConfigFile)
 
     return vars(parser.parse_args())
@@ -60,6 +62,7 @@ def main(
     plot,
     trim,
     use_target_features,
+    use_embed_in_src,
     **kwargs,
 ):
     """Main function."""
@@ -71,6 +74,10 @@ def main(
 
     model = torch.jit.load(ckpt_path).to(device).eval()
     print("[INFO] FragmentVC is loaded from", ckpt_path)
+
+    if use_embed_in_src:
+        wav2emb = load_pretrained_spk_emb(train=False, device=device)
+        print("[INFO] Speaker embedding model loaded")
 
     if not mel_only:
         vocoder = torch.jit.load(vocoder_path).to(device).eval()
@@ -114,6 +121,10 @@ def main(
         else:
             tgt_feat = None
 
+        if use_embed_in_src:
+            with torch.no_grad():
+                tgt_embed = wav2emb.embed_utterance(preprocess_wav(np.concatenate(tgt_wavs), sample_rate))
+
         tgt_mel = np.concatenate(tgt_mels, axis=0)
         tgt_mel = torch.FloatTensor(tgt_mel.T).unsqueeze(0).to(device)
 
@@ -125,6 +136,11 @@ def main(
 
             with torch.no_grad():
                 src_feat = wav2vec.extract_features(src_wav, None)[0]
+
+                if use_embed_in_src:
+                    # (batch_len, time, features_dim)
+                    cond = torch.repeat_interleave(tgt_embed.unsqueeze(0), src_feat.shape[1], dim=0).unsqueeze(0)
+                    src_feat = torch.cat([src_feat, cond], dim=2)
 
                 out_mel, attn = model(src_feat, tgt_mel)
                 out_mel = out_mel.transpose(1, 2).squeeze(0)

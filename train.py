@@ -53,6 +53,7 @@ def parse_args():
     parser.add_argument("--train_config", action=ActionConfigFile)
     return vars(parser.parse_args())
 
+use_embed_in_src = True
 
 def disc_fn(disc, batch, mask):
     scores = torch.cat([
@@ -105,6 +106,10 @@ def model_fn(batch, model, self_exclude, ref_included, device, cross=False):
     if cross:
         srcs = torch.roll(srcs, 1, 0)
         src_masks = torch.roll(src_masks, 1, 0)
+    if use_embed_in_src:
+        # (batch_len, time, features_dim)
+        cond = torch.repeat_interleave(tgt_spk_embs, srcs.shape[1], dim=0).reshape(*srcs.shape)
+        srcs = torch.cat([srcs, cond], dim=2)
     outs, _ = model(srcs, refs, refs_features=refs_features, src_masks=src_masks, ref_masks=ref_masks)
     return outs, tgts, tgt_spk_embs, ~src_masks
 

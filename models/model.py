@@ -86,7 +86,7 @@ class FragmentVC(nn.Module):
 class UnetBlock(nn.Module):
     """Hierarchically attend on references."""
 
-    def __init__(self, d_model: int):
+    def __init__(self, d_model: int, d_feat: int = 768):
         super(UnetBlock, self).__init__()
 
         self.conv1 = nn.Conv1d(80, d_model, 3, padding=1, padding_mode="replicate")
@@ -94,10 +94,10 @@ class UnetBlock(nn.Module):
         self.conv3 = nn.Conv1d(d_model, d_model, 3, padding=1, padding_mode="replicate")
 
         self.prenet = nn.Sequential(
-            nn.Linear(768, 768), nn.ReLU(), nn.Linear(768, d_model),
+            nn.Linear(d_feat, 768), nn.ReLU(), nn.Linear(768, d_model),
         )
         self.features_prenet = nn.Sequential(
-            nn.Linear(768, 768), nn.ReLU(), nn.Linear(768, d_model),
+            nn.Linear(d_feat, 768), nn.ReLU(), nn.Linear(768, d_model),
         )
 
         self.extractor1 = Extractor(d_model, 4, 1024, no_residual=True)
