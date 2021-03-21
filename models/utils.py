@@ -74,7 +74,7 @@ def load_pretrained_spk_emb(train=False, device='cpu', n_mels=80):
     #     model.sincnet = torch.nn.Conv1d(n_mels, model.frame1.input_dim, 3, 2)
     #     model = model.train().to(device)
 
-    model = VoiceEncoder()
+    model = VoiceEncoder().to(device)
     return model
 
 

@@ -115,9 +115,9 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
     ):
 
     # loss coefficients
-    adv_lambda = 0.05
-    cond_lambda = 0.025
-    # sim_lambda = 0.025
+    adv_lambda = 0.03
+    cond_lambda = 0.02
+    sim_lambda = 0.02
 
     # Discriminator losses
     d_loss = torch.tensor(0., device=device)

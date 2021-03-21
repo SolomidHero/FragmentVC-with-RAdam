@@ -31,8 +31,8 @@ def parse_args():
     parser.add_argument("--win_len", type=int, default=1280)
     parser.add_argument("--n_fft", type=int, default=1280)
     parser.add_argument("--n_mels", type=int, default=80)
-    parser.add_argument("--f_min", type=int, default=80)
-    parser.add_argument("--f_max", type=int, default=None)
+    parser.add_argument("--f_min", type=int, default=50)
+    parser.add_argument("--f_max", type=int, default=8000)
     parser.add_argument("--extract_spk_emb", action='store_true')
     parser.add_argument("--audio_config", action=ActionConfigFile)
 
