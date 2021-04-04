@@ -29,12 +29,12 @@ def parse_args():
     parser = ArgumentParser()
     parser.add_argument("data_dir", type=str)
     parser.add_argument("--save_dir", type=str, default=".")
-    parser.add_argument("--total_steps", type=int, default=60000)
+    parser.add_argument("--total_steps", type=int, default=70000)
     parser.add_argument("--warmup_steps", type=int, default=500)
     parser.add_argument("--valid_steps", type=int, default=1000)
     parser.add_argument("--log_steps", type=int, default=100)
     parser.add_argument("--save_steps", type=int, default=5000)
-    parser.add_argument("--milestones", type=int, nargs=2, default=[15000, 30000])
+    parser.add_argument("--milestones", type=int, nargs=2, default=[30000, 50000])
     parser.add_argument("--exclusive_rate", type=float, default=1.0)
     parser.add_argument("--n_samples", type=int, default=10)
     parser.add_argument("--accu_steps", type=int, default=2)
@@ -43,7 +43,7 @@ def parse_args():
     parser.add_argument("--preload", action="store_true")
     parser.add_argument("--comment", type=str)
     parser.add_argument("--ckpt", type=str, default=None)
-    parser.add_argument("--grad_norm_clip", type=float, default=10.0)
+    parser.add_argument("--grad_norm_clip", type=float, default=1.0)
     parser.add_argument("--use_target_features", action='store_true')
     parser.add_argument("--adv", action="store_true")
     parser.add_argument("--d_ckpt", type=str, default=None)
@@ -115,7 +115,7 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
     ):
 
     # loss coefficients
-    adv_lambda = 0.03
+    adv_lambda = 0.05
     cond_lambda = 0.02
     sim_lambda = 0.02
 
@@ -194,7 +194,7 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
     return g_loss.item(), g_adv_loss.item(), sim_loss.item(), d_loss.item()
 
 
-def valid(dataloader, model, device, writer=None):
+def valid(dataloader, model, device, writer=None, step=0):
     """Validate on validation set."""
 
     model.eval()
@@ -203,8 +203,8 @@ def valid(dataloader, model, device, writer=None):
 
     for i, batch in enumerate(dataloader):
         with torch.no_grad():
-            outs, tgts, _ = model_fn(batch, model, 1.0, True, device)
-            running_loss += mel_spec_loss(outs, tgts).item()
+            outs, tgts, _, mask = model_fn(batch, model, 1.0, True, device)
+            running_loss += mel_spec_loss(outs, tgts, mask).item()
 
         pbar.update(dataloader.batch_size)
         pbar.set_postfix(loss=f"{running_loss / (i+1):.2f}")
@@ -212,8 +212,11 @@ def valid(dataloader, model, device, writer=None):
 
     if writer is not None:
         for i, _ in zip(range(4), range(len(outs))):
-            writer.add_figure('ground_truth/spec_{}'.format(i), get_mel_plot(outs[i]), 1)
-            writer.add_figure('converted/spec_{}'.format(i), get_mel_plot(tgts[i]), 1)
+            out = torch.masked_select(outs[i], mask[i]).reshape(outs.shape[1], -1)
+            tgt = torch.masked_select(tgts[i], mask[i]).reshape(tgts.shape[1], -1)
+
+            writer.add_figure('ground_truth/spec_{}'.format(i), get_mel_plot(tgt), step)
+            writer.add_figure('converted/spec_{}'.format(i), get_mel_plot(out), step)
 
     pbar.close()
     model.train()
@@ -297,13 +300,13 @@ def main(
         else:
             disc = torch.jit.load(d_ckpt).to(device)
 
-        if d_sim_ckpt is None:
-            sim_disc = ConditionalDiscriminator().to(device)
-            sim_disc = torch.jit.script(sim_disc)
-        else:
-            sim_disc = torch.jit.load(d_sim_ckpt).to(device)
+        # if d_sim_ckpt is None:
+        #     sim_disc = ConditionalDiscriminator().to(device)
+        #     sim_disc = torch.jit.script(sim_disc)
+        # else:
+        #     sim_disc = torch.jit.load(d_sim_ckpt).to(device)
 
-        d_optimizer = RAdam(chain(disc.parameters(), [] if sim_disc is None else sim_disc.parameters()), lr=1e-4)
+        d_optimizer = AdamW(chain(disc.parameters(), [] if sim_disc is None else sim_disc.parameters()), lr=1e-4)
         d_scheduler = torch.optim.lr_scheduler.ExponentialLR(d_optimizer, gamma=0.99997)
 
     has_sim = sim or sim_ckpt is not None
@@ -321,17 +324,18 @@ def main(
             ref_included = False
 
         model = torch.jit.load(ckpt).to(device)
-        g_optimizer = RAdam([
-            {"params": model.unet.parameters(), "lr": 1e-4 if start_step < milestones[0] else 1e-6},
+        g_optimizer = AdamW([
+            {"params": model.unet.parameters(), "lr": 1e-4 if start_step < milestones[0] else 1e-4},
             {"params": model.smoothers.parameters()},
             {"params": model.mel_linear.parameters()},
             {"params": model.post_net.parameters()},
             {"params": sim_model.parameters() if has_sim else []},
         ], lr=1e-4,
         )
-        g_scheduler = get_cosine_schedule_with_warmup(
-            g_optimizer, warmup_steps, total_steps - start_step
-        )
+        # g_scheduler = get_cosine_schedule_with_warmup(
+        #     g_optimizer, warmup_steps, total_steps - start_step
+        # )
+        g_scheduler = torch.optim.lr_scheduler.ExponentialLR(g_optimizer, gamma=0.99997)
         print("Optimizer and scheduler restarted.")
         print(f"Model loaded from {ckpt}, iteration: {start_step}")
     else:
@@ -340,9 +344,9 @@ def main(
 
         model = FragmentVC().to(device)
         model = torch.jit.script(model)
-        g_optimizer = RAdam(chain(model.parameters(), sim_model.parameters()), lr=1e-4)
-        g_scheduler = get_cosine_schedule_with_warmup(g_optimizer, warmup_steps, total_steps)
-
+        g_optimizer = AdamW(chain(model.parameters(), [] if sim_model is None else sim_model.parameters()), lr=1e-4)
+        # g_scheduler = get_cosine_schedule_with_warmup(g_optimizer, warmup_steps, total_steps)
+        g_scheduler = torch.optim.lr_scheduler.ExponentialLR(g_optimizer, gamma=0.99997)
 
     self_exclude = 0.0
 
@@ -371,7 +375,7 @@ def main(
         if (step + 1) % valid_steps == 0:
             pbar.close()
 
-            valid_loss = valid(valid_loader, model, device, writer=None if comment is None else writer)
+            valid_loss = valid(valid_loader, model, device, writer=None if comment is None else writer, step=step+1)
 
             if comment is not None:
                 writer.add_scalar("Loss/valid", valid_loss, step + 1)
@@ -411,19 +415,19 @@ def main(
 
         elif (step + 1) == milestones[0]:
             ref_included = True
-            g_optimizer = RAdam(
-                [
-                    {"params": model.unet.parameters(), "lr": 1e-6},
-                    {"params": model.smoothers.parameters()},
-                    {"params": model.mel_linear.parameters()},
-                    {"params": model.post_net.parameters()},
-                    {"params": sim_model.parameters() if has_sim else []},
-                ],
-                lr=1e-4,
-            )
-            g_scheduler = get_cosine_schedule_with_warmup(
-                g_optimizer, warmup_steps, total_steps - milestones[0]
-            )
+            # g_optimizer = AdamW(
+            #     [
+            #         {"params": model.unet.parameters(), "lr": 1e-6},
+            #         {"params": model.smoothers.parameters()},
+            #         {"params": model.mel_linear.parameters()},
+            #         {"params": model.post_net.parameters()},
+            #         {"params": sim_model.parameters() if has_sim else []},
+            #     ],
+            #     lr=1e-4,
+            # )
+            # g_scheduler = get_cosine_schedule_with_warmup(
+            #     g_optimizer, warmup_steps, total_steps - milestones[0]
+            # )
             pbar.write("Optimizer and scheduler restarted.")
 
         elif (step + 1) > milestones[0]:

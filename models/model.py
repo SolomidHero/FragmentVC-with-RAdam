@@ -102,7 +102,7 @@ class UnetBlock(nn.Module):
         )
         nn.init.orthogonal_(self.prenet.weight)
 
-        self.extractor1 = Extractor(d_model, 4, 1024, no_residual=True)
+        self.extractor1 = Extractor(d_model, 4, 1024, no_residual=False)
         self.extractor2 = Extractor(d_model, 4, 1024)
         self.extractor3 = Extractor(d_model, 4, 1024)
 
