@@ -11,6 +11,7 @@ import torch
 import numpy as np
 import soundfile as sf
 from jsonargparse import ArgumentParser, ActionConfigFile
+from resemblyzer import preprocess_wav
 
 from data import load_wav, log_mel_spectrogram, plot_mel, plot_attn
 from models import load_pretrained_wav2vec
@@ -36,6 +37,7 @@ def parse_args():
     parser.add_argument("--mel_only", action='store_true')
     parser.add_argument("--trim", action='store_true')
     parser.add_argument("--plot", action='store_true')
+    parser.add_argument("--use_spk_emb", action='store_true')
     parser.add_argument("--use_target_features", action='store_true')
     parser.add_argument("--audio_config", action=ActionConfigFile)
 
@@ -59,6 +61,7 @@ def main(
     mel_only,
     plot,
     trim,
+    use_spk_emb,
     use_target_features,
     **kwargs,
 ):
@@ -88,6 +91,7 @@ def main(
         f_min=f_min,
         f_max=f_max,
     )
+    wav2emb = load_pretrained_spk_emb(train=False, device=device)
 
     with open(info_path) as f:
         infos = yaml.load(f, Loader=yaml.FullLoader)
@@ -117,6 +121,11 @@ def main(
         tgt_mel = np.concatenate(tgt_mels, axis=0)
         tgt_mel = torch.FloatTensor(tgt_mel.T).unsqueeze(0).to(device)
 
+        if use_spk_emb:
+            tgt_emb = wav2emb.embed_utterance(preprocess_wav(np.concatenate(tgt_wavs), sample_rate))
+        else:
+            tgt_emb = None
+
 
         pair_names.extend(pair["source"].keys())
         for cur_pair_name, source in pair["source"].items():
@@ -126,7 +135,7 @@ def main(
             with torch.no_grad():
                 src_feat = wav2vec.extract_features(src_wav, None)[0]
 
-                out_mel, attn = model(src_feat, tgt_mel)
+                out_mel, attn = model(src_feat, tgt_mel, ref_embs=tgt_emb)
                 out_mel = out_mel.transpose(1, 2).squeeze(0)
 
                 out_mels.append(out_mel.cpu() if mel_only else out_mel)
