@@ -45,6 +45,7 @@ def parse_args():
     parser.add_argument("--ckpt", type=str, default=None)
     parser.add_argument("--grad_norm_clip", type=float, default=1.0)
     parser.add_argument("--use_target_features", action='store_true')
+    parser.add_argument("--spk_emb", action="store_true")
     parser.add_argument("--adv", action="store_true")
     parser.add_argument("--d_ckpt", type=str, default=None)
     parser.add_argument("--sim", action="store_true")
@@ -105,7 +106,7 @@ def model_fn(batch, model, self_exclude, ref_included, device, cross=False):
     if cross:
         srcs = torch.roll(srcs, 1, 0)
         src_masks = torch.roll(src_masks, 1, 0)
-    outs, _ = model(srcs, refs, refs_features=refs_features, src_masks=src_masks, ref_masks=ref_masks)
+    outs, _ = model(srcs, refs, ref_embs=tgt_spk_embs, refs_features=refs_features, src_masks=src_masks, ref_masks=ref_masks)
     return outs, tgts, tgt_spk_embs, ~src_masks
 
 
@@ -243,6 +244,7 @@ def main(
     ckpt,
     grad_norm_clip,
     use_target_features,
+    spk_emb,
     adv,
     d_ckpt,
     sim,

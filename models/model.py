@@ -86,7 +86,7 @@ class FragmentVC(nn.Module):
 class UnetBlock(nn.Module):
     """Hierarchically attend on references."""
 
-    def __init__(self, d_model: int, d_feat: int = 768):
+    def __init__(self, d_model: int, d_feat: int = 768, d_emb: int = None):
         super(UnetBlock, self).__init__()
 
         self.conv1 = nn.Conv1d(80, d_model, 3, padding=1, padding_mode="replicate")
@@ -102,6 +102,14 @@ class UnetBlock(nn.Module):
         )
         nn.init.orthogonal_(self.prenet.weight)
 
+        self.use_emb = d_emb not is None
+        if self.use_emb:
+            self.emb_prenet = nn.Sequential(
+                nn.Linear(d_emb, 256),
+                nn.ReLU(),
+                nn.Linear(256, d_model),
+            )
+
         self.extractor1 = Extractor(d_model, 4, 1024, no_residual=False)
         self.extractor2 = Extractor(d_model, 4, 1024)
         self.extractor3 = Extractor(d_model, 4, 1024)
@@ -110,6 +118,7 @@ class UnetBlock(nn.Module):
         self,
         srcs: Tensor,
         refs: Tensor,
+        ref_embs: Optional[Tensor] = None,
         refs_features: Optional[Tensor] = None,
         src_masks: Optional[Tensor] = None,
         ref_masks: Optional[Tensor] = None,
@@ -120,13 +129,22 @@ class UnetBlock(nn.Module):
             srcs: (batch, src_len, 768)
             src_masks: (batch, src_len)
             refs: (batch, 80, ref_len)
+            ref_embs: (batch, d_emb)
             refs_features: (batch, ref_len, 768)
             ref_masks: (batch, ref_len)
         """
 
+
+        assert (ref_embs is not None) == self.use_emb
+
         # tgt: (batch, tgt_len, d_model)
         tgt = self.prenet(srcs)
         refs_features = None if refs_features is None else self.features_prenet(refs_features).transpose(0, 1)
+
+        if self.use_emb:
+            # ref_emb: (batch, d_model)
+            ref_embs = self.emb_prenet(ref_embs)
+            tgt = tgt + ref_embs.unsqueeze(1)
 
         # tgt: (tgt_len, batch, d_model)
         tgt = tgt.transpose(0, 1)
