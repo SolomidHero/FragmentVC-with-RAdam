@@ -102,7 +102,7 @@ class UnetBlock(nn.Module):
         )
         nn.init.orthogonal_(self.prenet.weight)
 
-        self.use_emb = d_emb not is None
+        self.use_emb = d_emb is not None
         if self.use_emb:
             self.emb_prenet = nn.Sequential(
                 nn.Linear(d_emb, 256),
