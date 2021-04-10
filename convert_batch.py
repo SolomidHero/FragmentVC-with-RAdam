@@ -14,7 +14,7 @@ from jsonargparse import ArgumentParser, ActionConfigFile
 from resemblyzer import preprocess_wav
 
 from data import load_wav, log_mel_spectrogram, plot_mel, plot_attn
-from models import load_pretrained_wav2vec
+from models import load_pretrained_wav2vec, load_pretrained_spk_emb
 
 
 def parse_args():
@@ -123,6 +123,7 @@ def main(
 
         if use_spk_emb:
             tgt_emb = wav2emb.embed_utterance(preprocess_wav(np.concatenate(tgt_wavs), sample_rate))
+            tgt_emb = torch.from_numpy(tgt_emb).to(device).unsqueeze(0)
         else:
             tgt_emb = None
 
