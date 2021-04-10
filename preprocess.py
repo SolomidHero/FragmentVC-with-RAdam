@@ -94,6 +94,9 @@ def main(
         if wav.size(-1) < 10:
             continue
 
+        f0 = torch.from_numpy(get_f0(wav.numpy().squeeze(0)))
+        energy = torch.from_numpy(get_energy(wav.numpy().squeeze(0)))
+
         wav = wav.to(device)
         speaker_name = speaker_name[0]
         audio_path = audio_path[0]
@@ -111,13 +114,16 @@ def main(
                 # }).data).mean(0)
                 # spk_emb = spk_emb / (spk_emb ** 2).sum(-1, keepdims=True) ** 0.5 # norm embeddings
 
-                spk_emb = wav2emb.embed_utterance(preprocess_wav(wav.cpu().numpy().squeeze(0), sample_rate))
+                spk_emb = torch.from_numpy(
+                    wav2emb.embed_utterance(preprocess_wav(wav.cpu().numpy().squeeze(0), sample_rate))
+                )
                 assert len(spk_emb.shape) == 1
 
             assert len(mel) == len(feat)
 
+
         fd, temp_file = mkstemp(suffix=".tar", prefix="utterance-", dir=out_dir_path)
-        torch.save({"feat": feat, "mel": mel, "spk_emb": spk_emb}, temp_file)
+        torch.save({"feat": feat, "mel": mel, "spk_emb": spk_emb, "f0": f0, "energy": energy}, temp_file)
         os.close(fd)
 
         if speaker_name not in speaker_infos.keys():
