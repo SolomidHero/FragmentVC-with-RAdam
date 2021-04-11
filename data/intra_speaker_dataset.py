@@ -60,30 +60,31 @@ class IntraSpeakerDataset(Dataset):
 
     def _get_data(self, index):
         if self.pre_load:
-            speaker_name, content_emb, target_mel, spk_emb = self.data[index]
-        else:
-            speaker_name, content_emb, target_mel, spk_emb = _load_data(*self.data[index])
-        return speaker_name, content_emb, target_mel, spk_emb
+            return self.data[index]
+        return _load_data(*self.data[index])
 
     def __getitem__(self, index):
-        speaker_name, content_emb, target_mel, spk_emb = self._get_data(index)
+        speaker_name, content_emb, target_mel, spk_emb, pitch, energy = self._get_data(index)
         utterance_indices = self.speaker_to_indices[speaker_name].copy()
         utterance_indices.remove(index)
 
         sampled_mels = []
         sampled_feats = []
+        sampled_pitches = []
         for sampled_id in random.sample(utterance_indices, self.n_samples):
-            _, sampled_feat, sampled_mel, _ = self._get_data(sampled_id)
+            _, sampled_feat, sampled_mel, _, sampled_pitch, _ = self._get_data(sampled_id)
             sampled_mels.append(sampled_mel)
             sampled_feats.append(sampled_feat)
+            sampled_pitches.append(sampled_pitch)
 
+        mean_pitch = torch.cat(sampled_pitches, dim=0).mean()
         reference_mels = torch.cat(sampled_mels, dim=0)
 
         if self.ref_feat:
             reference_feats = torch.cat(sampled_feats, dim=0)
-            return content_emb, (reference_mels, reference_feats), target_mel, spk_emb
+            return content_emb, (reference_mels, reference_feats), target_mel, spk_emb, (pitch, mean_pitch), energy
 
-        return content_emb, reference_mels, target_mel, spk_emb
+        return content_emb, reference_mels, target_mel, spk_emb, (pitch, mean_pitch), energy
 
 
 def _process_data(speaker_name, data_dir, feature_path, load):
@@ -98,13 +99,15 @@ def _load_data(speaker_name, data_dir, feature_path):
     content_emb = feature["feat"]
     target_mel = feature["mel"]
     spk_emb = feature["spk_emb"] if "spk_emb" in feature else None
+    pitch = feature["f0"]
+    energy = feature["energy"]
 
-    return speaker_name, content_emb, target_mel, spk_emb
+    return speaker_name, content_emb, target_mel, spk_emb, pitch, energy
 
 
 def collate_batch(batch):
     """Collate a batch of data."""
-    srcs, refs, tgts, spk_embs = zip(*batch)
+    srcs, refs, tgts, spk_embs, (pitches, mean_pitches), energies = zip(*batch)
 
     if len(refs[0]) == 2:
         refs, refs_features = zip(*refs)
@@ -135,9 +138,13 @@ def collate_batch(batch):
     tgts = pad_sequence(tgts, batch_first=True, padding_value=-20)
     tgts = tgts.transpose(1, 2)  # (batch, mel_dim, max_tgt_len)
 
+    pitches = pad_sequence(pitches, batch_first=True, padding_value=0.0) # (batch, max_ref_len)
+    mean_pitches = torch.stack(mean_pitches) # (batch,)
+    energies = pad_sequence(energies, batch_first=True, padding_value=0.0) # (batch, max_ref_len)
+
     tgt_masks = [torch.arange(tgts.size(2)) >= tgt_len for tgt_len in tgt_lens]
     tgt_masks = torch.stack(tgt_masks)  # (batch, max_tgt_len)
 
     spk_embs = torch.stack(spk_embs) if all(emb is not None for emb in spk_embs) else None
 
-    return srcs, src_masks, (refs, refs_features), ref_masks, tgts, tgt_masks, spk_embs, overlap_lens
+    return srcs, src_masks, (refs, refs_features), ref_masks, tgts, tgt_masks, spk_embs, (pitches, mean_pitches), energies

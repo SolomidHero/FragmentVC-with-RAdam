@@ -19,7 +19,7 @@ from jsonargparse import ArgumentParser, ActionConfigFile
 from data import IntraSpeakerDataset, collate_batch, infinite_iterator, get_mel_plot
 from models import (
     FragmentVC, Discriminator, ConditionalDiscriminator, load_pretrained_spk_emb,
-    adversarial_loss, discriminator_loss, mel_spec_loss, cosine_sim_loss,
+    adversarial_loss, discriminator_loss, mel_spec_loss, cosine_sim_loss, mse_loss,
     get_cosine_schedule_with_warmup
 )
 
@@ -82,7 +82,7 @@ def sim_disc_fn(sim_disc, batch, conds, mask):
 def model_fn(batch, model, self_exclude, ref_included, device, cross=False):
     """Forward a batch through model."""
 
-    srcs, src_masks, (refs, refs_features), ref_masks, tgts, tgt_masks, tgt_spk_embs, _ = batch
+    srcs, src_masks, (refs, refs_features), ref_masks, tgts, tgt_masks, tgt_spk_embs, (pitches, mean_pitches), energies = batch
 
     srcs = srcs.to(device)
     src_masks = src_masks.to(device)
@@ -91,6 +91,8 @@ def model_fn(batch, model, self_exclude, ref_included, device, cross=False):
     ref_masks = ref_masks.to(device)
     tgts = tgts.to(device)
     tgt_masks = tgt_masks.to(device)
+    pitches = pitches.to(device)
+    energies = energies.to(device)
     tgt_spk_embs = None if tgt_spk_embs is None else tgt_spk_embs.to(device)
 
     if ref_included:
@@ -106,8 +108,10 @@ def model_fn(batch, model, self_exclude, ref_included, device, cross=False):
     if cross:
         srcs = torch.roll(srcs, 1, 0)
         src_masks = torch.roll(src_masks, 1, 0)
-    outs, _ = model(srcs, refs, ref_embs=tgt_spk_embs, refs_features=refs_features, src_masks=src_masks, ref_masks=ref_masks)
-    return outs, tgts, tgt_spk_embs, ~src_masks
+        pitch_cross_diff = mean_pitches - torch.roll(mean_pitches, 1, 0)
+        pitches = torch.roll(pitch_cross_diff.unsqueeze(0) + pitches, 1, 0)
+    outs, p_prediction, e_prediction, _ = model(srcs, refs, ref_embs=tgt_spk_embs, refs_features=refs_features, src_masks=src_masks, ref_masks=ref_masks, pitch_target=pitches, energy_target=energies)
+    return outs, tgts, tgt_spk_embs, ~src_masks, (p_prediction, pitches), (e_prediction, energies)
 
 
 def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None, d_optimizer=None, d_scheduler=None,
@@ -126,7 +130,7 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
         for batch in batches:
             # identity
             with torch.no_grad():
-                outs, tgts, tgt_spk_embs, mask = model_fn(batch, model, self_exclude, ref_included, device)
+                outs, tgts, tgt_spk_embs, mask, _, _ = model_fn(batch, model, self_exclude, ref_included, device)
             fake_scores, real_scores = disc_fn(disc, outs, mask), disc_fn(disc, tgts, mask)
             d_loss += adv_lambda * discriminator_loss(fake_scores, real_scores)
             if sim_disc is not None:
@@ -134,7 +138,7 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
 
             # cross-conversion
             with torch.no_grad():
-                outs, tgts, tgt_spk_embs, mask = model_fn(batch, model, self_exclude, ref_included, device, cross=True)
+                outs, tgts, tgt_spk_embs, mask, _, _ = model_fn(batch, model, self_exclude, ref_included, device, cross=True)
             fake_scores, real_scores = disc_fn(disc, outs, mask), disc_fn(disc, tgts, mask)
             d_loss += adv_lambda * discriminator_loss(fake_scores, real_scores)
             if sim_disc is not None:
@@ -155,8 +159,10 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
     sim_loss = torch.tensor(0., device=device)
     for batch in batches:
         # identity
-        outs, tgts, tgt_spk_embs, mask = model_fn(batch, model, self_exclude, ref_included, device)
+        outs, tgts, tgt_spk_embs, mask, (p_pred, p_tgt), (e_pred, e_tgt) = model_fn(batch, model, self_exclude, ref_included, device)
         g_loss += mel_spec_loss(outs, tgts, mask=mask)
+        g_pitch_loss = mse_loss(p_pred, p_tgt, mask=mask)
+        g_energy_loss = mse_loss(e_pred, e_tgt, mask=mask)
         if disc is not None:
             g_adv_loss += adv_lambda * adversarial_loss(disc_fn(disc, outs, mask))
         if sim_model is not None:
@@ -166,7 +172,9 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
 
         # cross-conversion
         if sim_model is not None or disc is not None:
-            outs, tgts, tgt_spk_embs, mask = model_fn(batch, model, self_exclude, ref_included, device, cross=True)
+            outs, tgts, tgt_spk_embs, mask, (p_pred, p_tgt), (e_pred, e_tgt) = model_fn(batch, model, self_exclude, ref_included, device, cross=True)
+            g_pitch_loss += mse_loss(p_pred, p_tgt, mask=mask)
+            g_energy_loss += mse_loss(e_pred, e_tgt, mask=mask)
         if disc is not None:
             g_adv_loss += adv_lambda * adversarial_loss(disc_fn(disc, outs, mask))
         if sim_model is not None:
@@ -176,7 +184,9 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
 
     sim_loss /= len(batches)
     g_adv_loss /= len(batches)
-    g_loss = g_loss / len(batches) + g_adv_loss + sim_loss
+    g_pitch_loss /= len(batches)
+    g_energy_loss /= len(batches)
+    g_loss = g_loss / len(batches) + g_adv_loss + sim_loss + g_pitch_loss + g_energy_loss
 
     if g_optimizer is not None:
         g_optimizer.zero_grad()
@@ -192,7 +202,7 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
     if g_scheduler is not None:
         g_scheduler.step()
 
-    return g_loss.item(), g_adv_loss.item(), sim_loss.item(), d_loss.item()
+    return g_loss.item(), g_adv_loss.item(), sim_loss.item(), d_loss.item(), g_pitch_loss.item(), g_energy_loss.item()
 
 
 def valid(dataloader, model, device, writer=None, step=0):
@@ -204,8 +214,8 @@ def valid(dataloader, model, device, writer=None, step=0):
 
     for i, batch in enumerate(dataloader):
         with torch.no_grad():
-            outs, tgts, _, mask = model_fn(batch, model, 1.0, True, device)
-            running_loss += mel_spec_loss(outs, tgts, mask).item()
+            outs, tgts, _, mask, (p_pred, p_tgt), (e_pred, e_tgt) = model_fn(batch, model, 1.0, True, device)
+            running_loss += mel_spec_loss(outs, tgts, mask).item() + mse_loss(p_pred, p_tgt, mask) + mse_loss(e_pred, e_tgt, mask)
 
         pbar.update(dataloader.batch_size)
         pbar.set_postfix(loss=f"{running_loss / (i+1):.2f}")
@@ -359,7 +369,7 @@ def main(
 
         batches = [next(train_loader) for _ in range(accu_steps)]
 
-        batch_loss, g_adv_loss, sim_loss, d_loss = training_step(
+        batch_loss, g_adv_loss, sim_loss, d_loss, g_pitch_loss, g_energy_loss = training_step(
             batches, model, g_optimizer, g_scheduler, disc, d_optimizer, d_scheduler, sim_model=sim_model, sim_disc=sim_disc,
             device=device, grad_norm_clip=grad_norm_clip, self_exclude=self_exclude, ref_included=ref_included
         )
@@ -371,6 +381,8 @@ def main(
             writer.add_scalar("Loss/train", batch_loss, step)
             writer.add_scalar("Loss/g_adv", g_adv_loss, step)
             writer.add_scalar("Loss/g_similarity", sim_loss, step)
+            writer.add_scalar("Loss/g_pitch", g_pitch_loss, step)
+            writer.add_scalar("Loss/g_energy", g_energy_loss, step)
             writer.add_scalar("Loss/d_loss", d_loss, step)
             writer.add_scalar("Self-exclusive Rate", self_exclude, step)
 

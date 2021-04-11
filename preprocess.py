@@ -14,7 +14,7 @@ from torch.utils.data import DataLoader
 from jsonargparse import ArgumentParser, ActionConfigFile
 
 from models import load_pretrained_wav2vec, load_pretrained_spk_emb
-from data import PreprocessDataset
+from data import PreprocessDataset, get_f0, get_energy
 
 def parse_args():
     """Parse command-line arguments."""
@@ -94,8 +94,15 @@ def main(
         if wav.size(-1) < 10:
             continue
 
-        f0 = torch.from_numpy(get_f0(wav.numpy().squeeze(0)))
-        energy = torch.from_numpy(get_energy(wav.numpy().squeeze(0)))
+        try:
+            f0 = torch.from_numpy(get_f0(
+                wav.numpy().squeeze(0), sample_rate, hop_len*1000/sample_rate
+            ))
+            energy = torch.from_numpy(get_energy(
+                wav.numpy().squeeze(0), sample_rate, n_fft=n_fft, hop_length=hop_len, win_length=win_len
+            ))
+        except:
+            continue
 
         wav = wav.to(device)
         speaker_name = speaker_name[0]
@@ -119,7 +126,7 @@ def main(
                 )
                 assert len(spk_emb.shape) == 1
 
-            assert len(mel) == len(feat)
+            assert len(mel) == len(feat) and len(mel) == len(f0) and len(mel) == len(energy)
 
 
         fd, temp_file = mkstemp(suffix=".tar", prefix="utterance-", dir=out_dir_path)

@@ -8,6 +8,7 @@ import numpy as np
 import pyworld as pw
 import matplotlib
 from matplotlib import pyplot as plt
+import scipy
 from scipy.signal import lfilter
 
 matplotlib.use("Agg")

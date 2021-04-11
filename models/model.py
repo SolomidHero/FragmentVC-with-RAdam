@@ -55,6 +55,8 @@ class FragmentVC(nn.Module):
         refs_features: Optional[Tensor] = None,
         src_masks: Optional[Tensor] = None,
         ref_masks: Optional[Tensor] = None,
+        pitch_target: Optional[Tensor] = None,
+        energy_target: Optional[Tensor] = None,
     ) -> Tuple[Tensor, List[Optional[Tensor]]]:
         """Forward function.
 
@@ -68,7 +70,10 @@ class FragmentVC(nn.Module):
         """
 
         # out: (src_len, batch, d_model)
-        out, attns = self.unet(srcs, refs, ref_embs=ref_embs, refs_features=refs_features, src_masks=src_masks, ref_masks=ref_masks)
+        out, p_prediction, e_prediction, attns = self.unet(
+            srcs, refs, ref_embs=ref_embs, refs_features=refs_features, src_masks=src_masks, ref_masks=ref_masks,
+            pitch_target=pitch_target, energy_target=energy_target
+        )
 
         # out: (src_len, batch, d_model)
         out = self.smoothers(out, src_key_padding_mask=src_masks)
@@ -82,7 +87,7 @@ class FragmentVC(nn.Module):
         out = out + refined
 
         # out: (batch, 80, src_len)
-        return out, attns
+        return out, p_prediction, e_prediction, [attn1, attn2, attn3]
 
 
 class UnetBlock(nn.Module):
@@ -108,6 +113,15 @@ class UnetBlock(nn.Module):
                 nn.Linear(256, d_model),
             )
 
+        self.pitch_predictor = VariancePredictor(d_model)
+        self.energy_predictor = VariancePredictor(d_model)
+
+        self.pitch_bins = torch.linspace(-1.0, 1.0, 256 - 1)
+        self.energy_bins = torch.linspace(-2.0, 10.0, 256 - 1)
+
+        self.pitch_embedding = nn.Embedding(256, d_model)
+        self.energy_embedding = nn.Embedding(256, d_model)
+
         self.extractor1 = Extractor(d_model, 4, 1024, no_residual=False)
         self.extractor2 = Extractor(d_model, 4, 1024)
         self.extractor3 = Extractor(d_model, 4, 1024)
@@ -120,6 +134,8 @@ class UnetBlock(nn.Module):
         refs_features: Optional[Tensor] = None,
         src_masks: Optional[Tensor] = None,
         ref_masks: Optional[Tensor] = None,
+        pitch_target: Optional[Tensor] = None,
+        energy_target: Optional[Tensor] = None,
     ) -> Tuple[Tensor, List[Optional[Tensor]]]:
         """Forward function.
 
@@ -143,6 +159,23 @@ class UnetBlock(nn.Module):
             # ref_emb: (batch, d_model)
             ref_embs = self.emb_prenet(ref_embs)
             tgt = tgt + ref_embs.unsqueeze(1)
+
+        # pitch_prediction: (batch, tgt_len)
+        pitch_prediction = self.pitch_predictor(tgt, src_masks)
+        if pitch_target is not None:
+            pitch_embedding = self.pitch_embedding(torch.bucketize(pitch_target, self.pitch_bins))
+        else:
+            pitch_embedding = self.pitch_embedding(torch.bucketize(pitch_prediction, self.pitch_bins))
+
+        # energy_prediction: (batch, tgt_len)
+        energy_prediction = self.energy_predictor(tgt, src_masks)
+        if energy_target is not None:
+            energy_embedding = self.energy_embedding(torch.bucketize(energy_target, self.energy_bins))
+        else:
+            energy_embedding = self.energy_embedding(torch.bucketize(energy_prediction, self.energy_bins))
+
+        # tgt: (batch, tgt_len, d_model)
+        tgt = tgt + pitch_embedding + energy_embedding
 
         # tgt: (tgt_len, batch, d_model)
         tgt = tgt.transpose(0, 1)
@@ -174,8 +207,37 @@ class UnetBlock(nn.Module):
         )
 
         # out: (tgt_len, batch, d_model)
-        return out, [attn1, attn2, attn3]
+        return out, pitch_prediction, energy_prediction, [attn1, attn2, attn3]
 
+
+class VariancePredictor(nn.Module):
+    """ Pitch and Energy Predictor """
+
+    def __init__(self, d_model: int, d_hidden: int = 256, dropout: float=0.5):
+        super(VariancePredictor, self).__init__()
+
+
+        self.conv_layer = nn.Sequential(
+            nn.Conv1d(d_model, d_hidden, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.LayerNorm(d_hidden),
+            nn.Dropout(dropout),
+            nn.Conv1d(d_hidden, d_hidden, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.LayerNorm(d_hidden),
+            nn.Dropout(self.dropout),
+            nn.Conv1d(d_hidden, 1, kernel_size=1),
+        )
+
+
+    def forward(self, encoder_output, mask):
+        out = self.conv_layer(encoder_output)
+        out = out.squeeze(-2)
+
+        if mask is not None:
+            out = out.masked_fill(mask, 0.0)
+
+        return out
 
 
 class Discriminator(nn.Module):
