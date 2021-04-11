@@ -16,10 +16,10 @@ class FragmentVC(nn.Module):
     on mel spectrogram of the target speaker.
     """
 
-    def __init__(self, d_model=512):
+    def __init__(self, d_model=512, d_emb=None):
         super().__init__()
 
-        self.unet = UnetBlock(d_model)
+        self.unet = UnetBlock(d_model, d_emb=d_emb)
 
         self.smoothers = nn.TransformerEncoder(Smoother(d_model, 4, 1024), num_layers=3)
 
@@ -51,6 +51,7 @@ class FragmentVC(nn.Module):
         self,
         srcs: Tensor,
         refs: Tensor,
+        ref_embs: Optional[Tensor] = None,
         refs_features: Optional[Tensor] = None,
         src_masks: Optional[Tensor] = None,
         ref_masks: Optional[Tensor] = None,
@@ -60,13 +61,14 @@ class FragmentVC(nn.Module):
         Args:
             srcs: (batch, src_len, 768)
             src_masks: (batch, src_len)
+            ref_embs: (batch, d_emb)
             refs: (batch, 80, ref_len)
             refs_features: (batch, ref_len, 768)
             ref_masks: (batch, ref_len)
         """
 
         # out: (src_len, batch, d_model)
-        out, attns = self.unet(srcs, refs, refs_features=refs_features, src_masks=src_masks, ref_masks=ref_masks)
+        out, attns = self.unet(srcs, refs, ref_embs=ref_embs, refs_features=refs_features, src_masks=src_masks, ref_masks=ref_masks)
 
         # out: (src_len, batch, d_model)
         out = self.smoothers(out, src_key_padding_mask=src_masks)
@@ -93,13 +95,9 @@ class UnetBlock(nn.Module):
         self.conv2 = nn.Conv1d(d_model, d_model, 3, padding=1, padding_mode="replicate")
         self.conv3 = nn.Conv1d(d_model, d_model, 3, padding=1, padding_mode="replicate")
 
-        self.prenet = nn.Sequential(
-            nn.Linear(d_feat, d_model),
-        )
+        self.prenet = nn.Linear(d_feat, d_model)
         nn.init.orthogonal_(self.prenet.weight)
-        self.features_prenet = nn.Sequential(
-            nn.Linear(d_feat, d_model),
-        )
+        self.features_prenet = nn.Linear(d_feat, d_model)
         nn.init.orthogonal_(self.prenet.weight)
 
         self.use_emb = d_emb is not None
@@ -135,7 +133,7 @@ class UnetBlock(nn.Module):
         """
 
 
-        assert (ref_embs is not None) == self.use_emb
+        assert int(ref_embs is not None) == int(self.use_emb)
 
         # tgt: (batch, tgt_len, d_model)
         tgt = self.prenet(srcs)

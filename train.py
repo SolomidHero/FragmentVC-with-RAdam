@@ -344,7 +344,7 @@ def main(
         ref_included = False
         start_step = 0
 
-        model = FragmentVC().to(device)
+        model = FragmentVC(d_emb=256).to(device)
         model = torch.jit.script(model)
         g_optimizer = AdamW(chain(model.parameters(), [] if sim_model is None else sim_model.parameters()), lr=1e-4)
         # g_scheduler = get_cosine_schedule_with_warmup(g_optimizer, warmup_steps, total_steps)
