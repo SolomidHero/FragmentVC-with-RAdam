@@ -93,6 +93,7 @@ def model_fn(batch, model, self_exclude, ref_included, device, cross=False):
     tgt_masks = tgt_masks.to(device)
     pitches = pitches.to(device)
     energies = energies.to(device)
+    mean_pitches = mean_pitches.to(device)
     tgt_spk_embs = None if tgt_spk_embs is None else tgt_spk_embs.to(device)
 
     if ref_included:
@@ -108,8 +109,8 @@ def model_fn(batch, model, self_exclude, ref_included, device, cross=False):
     if cross:
         srcs = torch.roll(srcs, 1, 0)
         src_masks = torch.roll(src_masks, 1, 0)
-        pitch_cross_diff = mean_pitches - torch.roll(mean_pitches, 1, 0)
-        pitches = torch.roll(pitch_cross_diff.unsqueeze(0) + pitches, 1, 0)
+        pitches = (mean_pitches - torch.roll(mean_pitches, 1, 0)).unsqueeze(1) + torch.roll(pitches, 1, 0)
+        energies = torch.roll(energies, 1, 0)
     outs, p_prediction, e_prediction, _ = model(srcs, refs, ref_embs=tgt_spk_embs, refs_features=refs_features, src_masks=src_masks, ref_masks=ref_masks, pitch_target=pitches, energy_target=energies)
     return outs, tgts, tgt_spk_embs, ~src_masks, (p_prediction, pitches), (e_prediction, energies)
 
