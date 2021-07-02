@@ -136,7 +136,7 @@ def main(
             with torch.no_grad():
                 src_feat = wav2vec.extract_features(src_wav, None)[0]
 
-                out_mel, attn = model(src_feat, tgt_mel, ref_embs=tgt_emb)
+                out_mel, _, _, attn = model(src_feat, tgt_mel, ref_embs=tgt_emb)
                 out_mel = out_mel.transpose(1, 2).squeeze(0)
 
                 out_mels.append(out_mel.cpu() if mel_only else out_mel)

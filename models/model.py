@@ -165,6 +165,10 @@ class UnetBlock(nn.Module):
         tgt = self.prenet(srcs)
         refs_features = None if refs_features is None else self.features_prenet(refs_features).transpose(0, 1)
 
+        if ref_embs is not None:
+            # ref_emb: (batch, d_model)
+            ref_embs = self.emb_prenet(ref_embs)
+            tgt = tgt + ref_embs.unsqueeze(1)
 
         # pitch_prediction: (batch, tgt_len)
         pitch_prediction = self.pitch_predictor(tgt.transpose(1, 2), src_masks)
@@ -240,7 +244,11 @@ class VariancePredictor(nn.Module):
         self.conv_last = nn.Conv1d(d_hidden, 1, kernel_size=1)
 
 
-    def forward(self,encoder_output: Tensor, mask: Optional[Tensor] = None):
+    def forward(
+            self,
+            encoder_output: Tensor,
+            mask: Optional[Tensor] = None
+        ):
         out = self.dropout(self.ln1(self.conv1(encoder_output).transpose(1, 2))).transpose(1, 2)
         out = self.dropout(self.ln2(self.conv2(out).transpose(1, 2))).transpose(1, 2)
         out = self.conv_last(out)
