@@ -57,7 +57,7 @@ class FragmentVC(nn.Module):
         ref_masks: Optional[Tensor] = None,
         pitch_target: Optional[Tensor] = None,
         energy_target: Optional[Tensor] = None,
-    ) -> Tuple[Tensor, List[Optional[Tensor]]]:
+    ) -> Tuple[Tensor, Tensor, Tensor, List[Optional[Tensor]]]:
         """Forward function.
 
         Args:
@@ -87,7 +87,7 @@ class FragmentVC(nn.Module):
         out = out + refined
 
         # out: (batch, 80, src_len)
-        return out, p_prediction, e_prediction, [attn1, attn2, attn3]
+        return out, p_prediction, e_prediction, attns
 
 
 class UnetBlock(nn.Module):
@@ -100,27 +100,31 @@ class UnetBlock(nn.Module):
         self.conv2 = nn.Conv1d(d_model, d_model, 3, padding=1, padding_mode="replicate")
         self.conv3 = nn.Conv1d(d_model, d_model, 3, padding=1, padding_mode="replicate")
 
-        self.prenet = nn.Linear(d_feat, d_model)
-        nn.init.orthogonal_(self.prenet.weight)
-        self.features_prenet = nn.Linear(d_feat, d_model)
-        nn.init.orthogonal_(self.prenet.weight)
-
         self.use_emb = d_emb is not None
+        self.prenet = nn.Sequential(
+            nn.Linear(d_feat if not self.use_emb else d_feat + 256, 768),
+            nn.LeakyReLU(),
+            nn.Linear(768, d_model),
+        )
+        nn.init.orthogonal_(self.prenet[0].weight)
+        nn.init.orthogonal_(self.prenet[2].weight)
+        self.features_prenet = nn.Linear(d_feat, d_model)
+        nn.init.orthogonal_(self.features_prenet.weight)
+
         if self.use_emb:
             self.emb_prenet = nn.Sequential(
                 nn.Linear(d_emb, 256),
-                nn.ReLU(),
-                nn.Linear(256, d_model),
+                nn.LeakyReLU(),
             )
 
         self.pitch_predictor = VariancePredictor(d_model)
         self.energy_predictor = VariancePredictor(d_model)
 
-        self.pitch_bins = torch.linspace(-1.0, 1.0, 256 - 1)
-        self.energy_bins = torch.linspace(-2.0, 10.0, 256 - 1)
+        self.pitch_bins = nn.Parameter(torch.linspace(-1.0, 1.0, 256 - 1), requires_grad=False)
+        # self.energy_bins = nn.Parameter(torch.linspace(-2.0, 10.0, 256 - 1), requires_grad=False)
 
         self.pitch_embedding = nn.Embedding(256, d_model)
-        self.energy_embedding = nn.Embedding(256, d_model)
+        # self.energy_embedding = nn.Embedding(256, d_model)
 
         self.extractor1 = Extractor(d_model, 4, 1024, no_residual=False)
         self.extractor2 = Extractor(d_model, 4, 1024)
@@ -136,7 +140,7 @@ class UnetBlock(nn.Module):
         ref_masks: Optional[Tensor] = None,
         pitch_target: Optional[Tensor] = None,
         energy_target: Optional[Tensor] = None,
-    ) -> Tuple[Tensor, List[Optional[Tensor]]]:
+    ) -> Tuple[Tensor, Tensor, Tensor, List[Optional[Tensor]]]:
         """Forward function.
 
         Args:
@@ -151,31 +155,34 @@ class UnetBlock(nn.Module):
 
         assert int(ref_embs is not None) == int(self.use_emb)
 
+        if ref_embs is not None:
+            # ref_emb: (batch, d_model)
+            ref_embs = self.emb_prenet(ref_embs)
+            # tgt = tgt + ref_embs.unsqueeze(1)
+            srcs = torch.cat((srcs, ref_embs.unsqueeze(1).expand(srcs.size(0), srcs.size(1), ref_embs.size(1))), dim=2)
+
         # tgt: (batch, tgt_len, d_model)
         tgt = self.prenet(srcs)
         refs_features = None if refs_features is None else self.features_prenet(refs_features).transpose(0, 1)
 
-        if self.use_emb:
-            # ref_emb: (batch, d_model)
-            ref_embs = self.emb_prenet(ref_embs)
-            tgt = tgt + ref_embs.unsqueeze(1)
 
         # pitch_prediction: (batch, tgt_len)
-        pitch_prediction = self.pitch_predictor(tgt, src_masks)
+        pitch_prediction = self.pitch_predictor(tgt.transpose(1, 2), src_masks)
         if pitch_target is not None:
             pitch_embedding = self.pitch_embedding(torch.bucketize(pitch_target, self.pitch_bins))
         else:
             pitch_embedding = self.pitch_embedding(torch.bucketize(pitch_prediction, self.pitch_bins))
 
         # energy_prediction: (batch, tgt_len)
-        energy_prediction = self.energy_predictor(tgt, src_masks)
-        if energy_target is not None:
-            energy_embedding = self.energy_embedding(torch.bucketize(energy_target, self.energy_bins))
-        else:
-            energy_embedding = self.energy_embedding(torch.bucketize(energy_prediction, self.energy_bins))
+        energy_prediction = torch.empty(0)
+        # energy_prediction = self.energy_predictor(tgt.transpose(1, 2), src_masks)
+        # if energy_target is not None:
+        #     energy_embedding = self.energy_embedding(torch.bucketize(energy_target, self.energy_bins))
+        # else:
+        #     energy_embedding = self.energy_embedding(torch.bucketize(energy_prediction, self.energy_bins))
 
         # tgt: (batch, tgt_len, d_model)
-        tgt = tgt + pitch_embedding + energy_embedding
+        tgt = tgt + pitch_embedding
 
         # tgt: (tgt_len, batch, d_model)
         tgt = tgt.transpose(0, 1)
@@ -216,22 +223,27 @@ class VariancePredictor(nn.Module):
     def __init__(self, d_model: int, d_hidden: int = 256, dropout: float=0.5):
         super(VariancePredictor, self).__init__()
 
+        self.dropout = nn.Dropout(dropout)
 
-        self.conv_layer = nn.Sequential(
+        self.conv1 = nn.Sequential(
             nn.Conv1d(d_model, d_hidden, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.LayerNorm(d_hidden),
-            nn.Dropout(dropout),
-            nn.Conv1d(d_hidden, d_hidden, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.LayerNorm(d_hidden),
-            nn.Dropout(self.dropout),
-            nn.Conv1d(d_hidden, 1, kernel_size=1),
+            nn.ReLU()
         )
+        self.ln1 = nn.LayerNorm(d_hidden)
+
+        self.conv2= nn.Sequential(
+            nn.Conv1d(d_hidden, d_hidden, kernel_size=3, padding=1),
+            nn.ReLU()
+        )
+        self.ln2 = nn.LayerNorm(d_hidden)
+
+        self.conv_last = nn.Conv1d(d_hidden, 1, kernel_size=1)
 
 
-    def forward(self, encoder_output, mask):
-        out = self.conv_layer(encoder_output)
+    def forward(self,encoder_output: Tensor, mask: Optional[Tensor] = None):
+        out = self.dropout(self.ln1(self.conv1(encoder_output).transpose(1, 2))).transpose(1, 2)
+        out = self.dropout(self.ln2(self.conv2(out).transpose(1, 2))).transpose(1, 2)
+        out = self.conv_last(out)
         out = out.squeeze(-2)
 
         if mask is not None:

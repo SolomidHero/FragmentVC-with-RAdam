@@ -84,7 +84,7 @@ class IntraSpeakerDataset(Dataset):
             reference_feats = torch.cat(sampled_feats, dim=0)
             return content_emb, (reference_mels, reference_feats), target_mel, spk_emb, (pitch, mean_pitch), energy
 
-        return content_emb, reference_mels, target_mel, spk_emb, (pitch, mean_pitch), energy
+        return content_emb, reference_mels, target_mel, spk_emb, pitch, mean_pitch, energy
 
 
 def _process_data(speaker_name, data_dir, feature_path, load):
@@ -107,7 +107,7 @@ def _load_data(speaker_name, data_dir, feature_path):
 
 def collate_batch(batch):
     """Collate a batch of data."""
-    srcs, refs, tgts, spk_embs, (pitches, mean_pitches), energies = zip(*batch)
+    srcs, refs, tgts, spk_embs, pitches, mean_pitches, energies = zip(*batch)
 
     if len(refs[0]) == 2:
         refs, refs_features = zip(*refs)

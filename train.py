@@ -29,16 +29,16 @@ def parse_args():
     parser = ArgumentParser()
     parser.add_argument("data_dir", type=str)
     parser.add_argument("--save_dir", type=str, default=".")
-    parser.add_argument("--total_steps", type=int, default=70000)
+    parser.add_argument("--total_steps", type=int, default=80000)
     parser.add_argument("--warmup_steps", type=int, default=500)
     parser.add_argument("--valid_steps", type=int, default=1000)
     parser.add_argument("--log_steps", type=int, default=100)
     parser.add_argument("--save_steps", type=int, default=5000)
-    parser.add_argument("--milestones", type=int, nargs=2, default=[30000, 50000])
+    parser.add_argument("--milestones", type=int, nargs=2, default=[40000, 50000])
     parser.add_argument("--exclusive_rate", type=float, default=1.0)
-    parser.add_argument("--n_samples", type=int, default=10)
+    parser.add_argument("--n_samples", type=int, default=6)
     parser.add_argument("--accu_steps", type=int, default=2)
-    parser.add_argument("--batch_size", type=int, default=8)
+    parser.add_argument("--batch_size", type=int, default=6)
     parser.add_argument("--n_workers", type=int, default=8)
     parser.add_argument("--preload", action="store_true")
     parser.add_argument("--comment", type=str)
@@ -93,6 +93,7 @@ def model_fn(batch, model, self_exclude, ref_included, device, cross=False):
     tgt_masks = tgt_masks.to(device)
     pitches = pitches.to(device)
     energies = energies.to(device)
+    mean_pitches = mean_pitches.to(device)
     tgt_spk_embs = None if tgt_spk_embs is None else tgt_spk_embs.to(device)
 
     if ref_included:
@@ -108,8 +109,8 @@ def model_fn(batch, model, self_exclude, ref_included, device, cross=False):
     if cross:
         srcs = torch.roll(srcs, 1, 0)
         src_masks = torch.roll(src_masks, 1, 0)
-        pitch_cross_diff = mean_pitches - torch.roll(mean_pitches, 1, 0)
-        pitches = torch.roll(pitch_cross_diff.unsqueeze(0) + pitches, 1, 0)
+        pitches = (mean_pitches - torch.roll(mean_pitches, 1, 0)).unsqueeze(1) + torch.roll(pitches, 1, 0)
+        energies = torch.roll(energies, 1, 0)
     outs, p_prediction, e_prediction, _ = model(srcs, refs, ref_embs=tgt_spk_embs, refs_features=refs_features, src_masks=src_masks, ref_masks=ref_masks, pitch_target=pitches, energy_target=energies)
     return outs, tgts, tgt_spk_embs, ~src_masks, (p_prediction, pitches), (e_prediction, energies)
 
@@ -120,9 +121,9 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
     ):
 
     # loss coefficients
-    adv_lambda = 0.05
-    cond_lambda = 0.02
-    sim_lambda = 0.02
+    adv_lambda = 0.03
+    # cond_lambda = 0.02
+    # sim_lambda = 0.02
 
     # Discriminator losses
     d_loss = torch.tensor(0., device=device)
@@ -157,12 +158,14 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
     g_loss = torch.tensor(0., device=device)
     g_adv_loss = torch.tensor(0., device=device)
     sim_loss = torch.tensor(0., device=device)
+    g_pitch_loss = torch.tensor(0., device=device)
+    g_energy_loss = torch.tensor(0., device=device)
     for batch in batches:
         # identity
         outs, tgts, tgt_spk_embs, mask, (p_pred, p_tgt), (e_pred, e_tgt) = model_fn(batch, model, self_exclude, ref_included, device)
         g_loss += mel_spec_loss(outs, tgts, mask=mask)
-        g_pitch_loss = mse_loss(p_pred, p_tgt, mask=mask)
-        g_energy_loss = mse_loss(e_pred, e_tgt, mask=mask)
+        g_pitch_loss += mse_loss(p_pred, p_tgt, mask=mask)
+        # g_energy_loss += mse_loss(e_pred, e_tgt, mask=mask)
         if disc is not None:
             g_adv_loss += adv_lambda * adversarial_loss(disc_fn(disc, outs, mask))
         if sim_model is not None:
@@ -174,7 +177,7 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
         if sim_model is not None or disc is not None:
             outs, tgts, tgt_spk_embs, mask, (p_pred, p_tgt), (e_pred, e_tgt) = model_fn(batch, model, self_exclude, ref_included, device, cross=True)
             g_pitch_loss += mse_loss(p_pred, p_tgt, mask=mask)
-            g_energy_loss += mse_loss(e_pred, e_tgt, mask=mask)
+            # g_energy_loss += mse_loss(e_pred, e_tgt, mask=mask)
         if disc is not None:
             g_adv_loss += adv_lambda * adversarial_loss(disc_fn(disc, outs, mask))
         if sim_model is not None:
@@ -186,7 +189,7 @@ def training_step(batches, model, g_optimizer=None, g_scheduler=None, disc=None,
     g_adv_loss /= len(batches)
     g_pitch_loss /= len(batches)
     g_energy_loss /= len(batches)
-    g_loss = g_loss / len(batches) + g_adv_loss + sim_loss + g_pitch_loss + g_energy_loss
+    g_loss = g_loss / len(batches) + g_adv_loss + sim_loss + g_pitch_loss
 
     if g_optimizer is not None:
         g_optimizer.zero_grad()
@@ -215,7 +218,8 @@ def valid(dataloader, model, device, writer=None, step=0):
     for i, batch in enumerate(dataloader):
         with torch.no_grad():
             outs, tgts, _, mask, (p_pred, p_tgt), (e_pred, e_tgt) = model_fn(batch, model, 1.0, True, device)
-            running_loss += mel_spec_loss(outs, tgts, mask).item() + mse_loss(p_pred, p_tgt, mask) + mse_loss(e_pred, e_tgt, mask)
+            # running_loss += mel_spec_loss(outs, tgts, mask).item() + mse_loss(p_pred, p_tgt, mask) + mse_loss(e_pred, e_tgt, mask)
+            running_loss += mel_spec_loss(outs, tgts, mask).item() + mse_loss(p_pred, p_tgt, mask)
 
         pbar.update(dataloader.batch_size)
         pbar.set_postfix(loss=f"{running_loss / (i+1):.2f}")
